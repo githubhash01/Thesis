@@ -2,6 +2,7 @@ import numpy as np
 import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
+import argparse
 import os
 import jax
 from simulation import (
@@ -68,7 +69,7 @@ def build_environment(experiment_name):
     else:
         raise ValueError(f"Unknown experiment: {experiment_name}")
 
-def run_experiment(experiment_name, gradient_mode):
+def run_experiment(experiment_name, gradient_mode, visualise=False):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment_name)
 
     # TODO - DANIEL'S FD IMPLEMENTATION
@@ -100,19 +101,36 @@ def run_experiment(experiment_name, gradient_mode):
     np.save(os.path.join(saved_data_dir, f"jacobians_{gradient_mode}.npy"), jacobians)
 
     # visualise the trajectory
-    visualise_trajectory(states, mj_data, mj_model)
+    if visualise:
+        visualise_trajectory(states, mj_data, mj_model)
 
 def main():
-    experiments = ["one_bounce", "two_cart", "finger"]
-    for experiment in experiments:
-        #run_experiment(experiment, "autodiff")
-        jax.debug.print("Running experiment {}", experiment)
-        run_experiment(experiment, "fd")
 
-    #run_experiment("one_bounce", "autodiff")
-    #run_experiment("one_bounce", "fd")
-    #run_experiment("two_cart", "autodiff")
-    #run_experiment("finger", "autodiff")
+    # parse the input arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--solver", type=str, default="default", help="Solver can be default or implicit")
+    args = parser.parse_args()
+
+    experiments = ["one_bounce", "two_cart", "finger"]
+    standard_solver_gradient_modes = ["autodiff", "fd"]
+
+    if args.solver == "default":
+        for experiment in experiments:
+            for gradient_mode in standard_solver_gradient_modes:
+                jax.debug.print("Experiment: {} Gradient Mode: {} ", experiment, gradient_mode)
+                run_experiment(experiment, gradient_mode)
+
+    elif args.solver == "implicit_jaxopt":
+        gradient_mode = "implicit_jaxopt"
+        for experiment in experiments:
+            jax.debug.print("Experiment: {} Gradient Mode: {} ", experiment, gradient_mode)
+            run_experiment(experiment, gradient_mode)
+
+    elif args.solver == "implicit_lax":
+        gradient_mode = "implicit_lax"
+        for experiment in experiments:
+            jax.debug.print("Experiment: {} Gradient Mode: {} ", experiment, gradient_mode)
+            run_experiment(experiment, gradient_mode)
 
 if __name__ == "__main__":
     main()
