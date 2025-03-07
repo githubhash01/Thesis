@@ -126,8 +126,10 @@ def run_experiment(experiment, visualise=False):
 
 
 def main():
-    # or run a specific experiment
-    run_experiment("one_bounce", visualise=True)
+    # run all of the experiments
+    for experiment in ExperimentType:
+        print(f"Running: {experiment} using: {args.gradient_mode}\n")
+        run_experiment(experiment, visualise=False)
 
 
 if __name__ == "__main__":
