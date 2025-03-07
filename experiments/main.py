@@ -1,7 +1,6 @@
 from enum import Enum
 import argparse
 import os
-import jax
 from jax import numpy as jnp
 import numpy as np
 
@@ -139,7 +138,9 @@ def run_experiment(experiment, visualise=False):
 def main():
 
     """
-   for experiment in ExperimentType:
+    Run all experiments:
+
+    for experiment in ExperimentType:
         print(f"Running: {experiment} using: {args.gradient_mode}\n")
         run_experiment(experiment, visualise=False)
 
