@@ -94,11 +94,23 @@ def build_fd_cache(
         eps=eps
     )
 
+# -------------------------------------------------------------
+# Step function with default Autodiff derivative
+# -------------------------------------------------------------
+def make_step_fn(mx, set_control_fn):
+
+    def step_fn(dx: mjx.Data, u: jnp.ndarray):
+        dx_with_ctrl = set_control_fn(dx, u)
+        return mjx.step(mx, dx_with_ctrl)
+
+    return step_fn
+
+
 
 # -------------------------------------------------------------
 # Step function with custom FD-based derivative
 # -------------------------------------------------------------
-def make_step_fn(
+def make_step_fn_fd(
         mx,
         set_control_fn: Callable,
         fd_cache: FDCache
@@ -312,7 +324,7 @@ def make_loss_multi_init(
     )
 
     # FD-based custom VJP
-    step_fn = make_step_fn(mx, set_control_fn, fd_cache)
+    step_fn = make_step_fn_fd(mx, set_control_fn, fd_cache)
 
     def multi_init_loss(params, static, keys):
         _, costs_batched = simulate_trajectories(

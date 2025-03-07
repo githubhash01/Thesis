@@ -7,7 +7,7 @@ from mujoco import mjx
 import equinox
 import optax
 from diff_sim.traj_opt.policy import (
-    simulate_trajectories, make_loss_multi_init, make_step_fn, build_fd_cache
+    simulate_trajectories, make_loss_multi_init, make_step_fn_fd, build_fd_cache
 )
 from diff_sim.nn.base_nn import Network
 from diff_sim.utils.math_helper import angle_axis_to_quaternion, quaternion_to_angle_axis
@@ -84,7 +84,7 @@ class PolicyNet(Network):
 if __name__ == "__main__":
 
     # Load MuJoCo model
-    model = mujoco.MjModel.from_xml_path("../../xmls/finger_mjx.xml")
+    model = mujoco.MjModel.from_xml_path("/Users/hashim/Desktop/Thesis/mjx/diff_sim/xmls/finger_mjx.xml")
     mx = mjx.put_model(model)
     dx_template = mjx.make_data(mx)
     dx_template = jax.tree.map(upscale, dx_template)
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     optimal_nn = optimizer.solve(nn, adam, opt_state, batch_size=n_batch*n_samples, max_iter=50)
 
     fd_cache = build_fd_cache(dx_template)
-    step_fn = make_step_fn(mx, set_control, fd_cache)
+    step_fn = make_step_fn_fd(mx, set_control, fd_cache)
     # Evaluate final performance *on the entire batch*
     params, static = equinox.partition(optimal_nn, equinox.is_array)
     _, subkey = jax.random.split(init_key, num=(2,)) 
