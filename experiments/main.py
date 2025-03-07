@@ -37,7 +37,19 @@ Now we can import mujoco modules, having set the solver
 """
 import mujoco
 from mujoco import mjx
-from simulation import (make_step_fn, make_step_fn_fd, simulate, visualise_trajectory)
+from simulation import (
+    make_step_fn,
+    make_step_fn_fd,
+    simulate,
+    visualise_trajectory,
+
+    upscale,
+    build_fd_cache,
+    set_control,
+    make_step_fn_default, # default step function using dx instead of state
+    make_step_fn_fd_cache,
+    simulate_ # simulate function that uses the default step function
+)
 
 
 def build_environment(experiment):
@@ -94,16 +106,15 @@ def run_experiment(experiment, visualise=False):
 
     # TODO - DANIEL'S FD IMPLEMENTATION
     """
-    Code for Daniel's FD Implementation 
-    if gradient_mode == "fd":
+    if args.gradient_mode == GradientMode.FD:
         dx_template = mjx.make_data(mjx_model)
         dx_template = jax.tree.map(upscale, dx_template)
         fd_cache = build_fd_cache(dx_template)
-        step_function = make_step_fn_fd(mjx_model, set_control, fd_cache)
-        
+        step_function = make_step_fn_fd_cache(mjx_model, set_control, fd_cache)
     """
 
     if args.gradient_mode == GradientMode.FD:
+        # alternatively use the standard finite difference method
         step_function = make_step_fn_fd(mjx_model, mjx_data)
 
     else:
@@ -126,10 +137,14 @@ def run_experiment(experiment, visualise=False):
 
 
 def main():
-    # run all of the experiments
-    for experiment in ExperimentType:
+
+    """
+   for experiment in ExperimentType:
         print(f"Running: {experiment} using: {args.gradient_mode}\n")
         run_experiment(experiment, visualise=False)
+
+    """
+    run_experiment(ExperimentType.FINGER, visualise=True)
 
 
 if __name__ == "__main__":

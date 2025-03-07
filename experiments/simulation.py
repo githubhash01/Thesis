@@ -102,14 +102,11 @@ Daniel's FD-based step function
 # Finite-difference cache
 # -------------------------------------------------------------
 
-def make_step_fn_default(mx, set_control_fn):
-    jax.debug.print("DEFAULT")
+def make_step_fn_default(mjx_model, set_control_fn):
 
-    def step_fn(dx: mjx.Data, u: jnp.ndarray = None):
-        if u:
-            return mjx.step(mx, set_control_fn(dx, u))
-        else:
-            return mjx.step(mx, dx)
+    @jax.jit
+    def step_fn(mjx_data: mjx.Data, u: jnp.ndarray):
+        return mjx.step(mjx_model, mjx_data)
 
     return step_fn
 
@@ -305,6 +302,7 @@ def make_step_fn_fd_cache(
 Simulation Loop 
 """
 
+# simulate states
 def simulate(mjx_data, num_steps, step_function):
     state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
     states = [state]
@@ -321,10 +319,43 @@ def simulate(mjx_data, num_steps, step_function):
     states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
     return states, state_jacobians
 
+# simulate dx data structures
+def simulate_(mjx_data, num_steps, step_function):
+    # Initial state as a concatenated vector of qpos and qvel.
+    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+    states = [state]
+    state_jacobians = []
+
+    # Wrapper that converts state vector -> mjx.Data, calls step_function, and returns a state vector.
+    def state_wrapper(state):
+        # Assuming mjx_data has nq elements in qpos.
+        nq = mjx_data.qpos.shape[0]
+        # Create a new mjx.Data with the current state.c
+        dx = mjx_data.replace(qpos=state[:nq], qvel=state[nq:])
+        # Call the step function with no control (u=None).
+        dx_next = step_function(dx, u=jnp.zeros(mjx_data.ctrl.shape))
+        # Convert the resulting mjx.Data back into a state vector.
+        return jnp.concatenate([dx_next.qpos, dx_next.qvel])
+
+    # JIT compile the Jacobian function of the state wrapper.
+    jac_fn_rev = jax.jit(jax.jacrev(state_wrapper))
+
+    for _ in range(num_steps):
+        # Compute the Jacobian of the state transition.
+        J_s = jac_fn_rev(state)
+        state_jacobians.append(J_s)
+        # Update the state using the wrapped step function.
+        state = state_wrapper(state)
+        states.append(state)
+
+    # Convert lists to JAX arrays.
+    states = jnp.array(states)
+    state_jacobians = jnp.array(state_jacobians)
+    return states, state_jacobians
+
 """
 Visualisation
 """
-
 
 def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01):
 

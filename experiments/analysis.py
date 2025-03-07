@@ -45,7 +45,7 @@ def print_state_jacobian(jacobian_state, mujoco_model):
     print("\nJacobian Block: dv_next/dv (Velocity w.r.t. Velocity)")
     print(df_dv_dv)
 
-def compare_jacobians(jacobians_a, jacobians_b, a_name, b_name):
+def compare_jacobians(jacobians_a, jacobians_b):
     """
     Compare two sets of Jacobians over time and visualize the error.
 
@@ -66,7 +66,7 @@ def compare_jacobians(jacobians_a, jacobians_b, a_name, b_name):
     plt.plot(range(num_timesteps), frob_norms, label=f"Frobenius Norm Difference", color="red")
     plt.xlabel("Time Step")
     plt.ylabel("Error")
-    plt.title(f"{b_name} State Jacobian Error Over Time")
+    plt.title(f"State Jacobian Error Over Time")
     plt.legend()
     plt.grid()
     plt.show()
@@ -126,7 +126,7 @@ def set_one_bounce_analytic(time_steps=1000, timestep_length=0.01):
 
 def main():
 
-    experiment = ExperimentType.ONE_BOUNCE # setting the experiment to one bounce
+    experiment = ExperimentType.FINGER # setting the experiment to one bounce
 
     xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
     model = mujoco.MjModel.from_xml_path(filename=xml_path)
@@ -139,7 +139,7 @@ def main():
     #print_state_jacobian(jacobians_ad[600], model)
 
     # compare the jacobians
-    error_stats = compare_jacobians(jacobians_implicit_jaxopt, jacobians_fd, GradientMode.IMPLICIT_JAXOPT, GradientMode.FD)
+    error_stats = compare_jacobians(jacobians_ad, jacobians_implicit_jaxopt)
     print(error_stats)
 
 
