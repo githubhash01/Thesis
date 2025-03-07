@@ -1,15 +1,23 @@
 import pandas as pd
 import numpy as np
 import os
-from main import BASE_DIR, build_environment
+import matplotlib.pyplot as plt
+from main import BASE_DIR, ExperimentType, GradientMode
+import mujoco
+
+
+def get_experiment_data(experiment_name, gradient_method):
+    saved_data_dir = str(os.path.join(BASE_DIR, "stored_data", experiment_name))
+    jacobians_file = f"jacobians_{gradient_method}.npy"
+    states_file = f"states_{gradient_method}.npy"
+    states = np.load(os.path.join(saved_data_dir, states_file))
+    jacobians = np.load(os.path.join(saved_data_dir, jacobians_file))
+    return states, jacobians
 
 def print_state_jacobian(jacobian_state, mujoco_model):
 
     nq = mujoco_model.nq  # expected to be 7
     nv = mujoco_model.nv  # expected to be 6
-    # Define labels for qpos and qvel
-    #qpos_labels = ['p_x', 'p_y', 'p_z', 'q_w', 'q_x', 'q_y', 'q_z']
-    #qvel_labels = ['v_x', 'v_y', 'v_z', 'ω_x', 'ω_y', 'ω_z']
 
     # Extract blocks from the full Jacobian
     # dq_next/dq: top-left block (nq x nq)
@@ -37,21 +45,104 @@ def print_state_jacobian(jacobian_state, mujoco_model):
     print("\nJacobian Block: dv_next/dv (Velocity w.r.t. Velocity)")
     print(df_dv_dv)
 
-def get_states_jacobians(experiment_name, gradient_method):
-    saved_data_dir = str(os.path.join(BASE_DIR, "stored_data", experiment_name))
-    jacobians_file = f"jacobians_{gradient_method}.npy"
-    states_file = f"states_{gradient_method}.npy"
-    states = np.load(os.path.join(saved_data_dir, states_file))
-    jacobians = np.load(os.path.join(saved_data_dir, jacobians_file))
-    return states, jacobians
+def compare_jacobians(jacobians_a, jacobians_b, a_name, b_name):
+    """
+    Compare two sets of Jacobians over time and visualize the error.
+
+    :param jacobians_a: (T, nq+nv, nq+nv) numpy array of accurate Jacobians (e.g., autodiff)
+    :param jacobians_b: (T, nq+nv, nq+nv) numpy array of experimental Jacobians (e.g., finite difference)
+    """
+    assert jacobians_a.shape == jacobians_b.shape, "Jacobians must have the same shape."
+
+    num_timesteps = jacobians_a.shape[0]  # Number of timesteps
+
+    # Compute absolute and Frobenius norm errors per timestep
+    abs_error = np.abs(jacobians_a - jacobians_b)  # Element-wise absolute error
+    frob_norms = np.linalg.norm(jacobians_a - jacobians_b, ord='fro', axis=(1, 2))  # Frobenius norm per timestep
+    mse = np.mean((jacobians_a - jacobians_b) ** 2, axis=(1, 2))  # MSE per timestep
+
+    # === Plot Frobenius Norm Over Time ===
+    plt.figure(figsize=(10, 4))
+    plt.plot(range(num_timesteps), frob_norms, label=f"Frobenius Norm Difference", color="red")
+    plt.xlabel("Time Step")
+    plt.ylabel("Error")
+    plt.title(f"{b_name} State Jacobian Error Over Time")
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+    # Return error statistics
+    return {
+        "mean_absolute_error": np.mean(abs_error),
+        "mean_squared_error": np.mean(mse),
+        "mean_frobenius_norm": np.mean(frob_norms),
+        "max_absolute_error": np.max(abs_error)
+    }
+
+def set_one_bounce_analytic(time_steps=1000, timestep_length=0.01):
+    """
+    Build the analytic Jacobians for the one bounce experiment.
+    """
+    # Initialize the Jacobians
+    nq, nv = 7, 6
+
+    """
+    Constant jacobian 
+
+    dq_next/dq: I 
+    dq_next/dv: t 
+    dv_next/dq: 0
+    dv_next/dv: I
+
+    """
+    dq_next_dq = np.eye(nq)
+    dq_next_dv = np.zeros((nq, nv))
+    # edit the first 3 diagonals of dq_next_dv to be timestep_length
+    dq_next_dv[0, 0] = timestep_length
+    dq_next_dv[1, 1] = timestep_length
+    dq_next_dv[2, 2] = timestep_length
+
+    # Correct shape: dv_next_dq should be (nv, nq)
+    dv_next_dq = np.zeros((nv, nq))
+    dv_next_dv = np.eye(nv)
+
+    # build out the full (nq+nv) x (nq+nv) Jacobian
+    jacobian_constant = np.block([
+        [dq_next_dq, dq_next_dv],
+        [dv_next_dq, dv_next_dv]
+    ])
+
+    jacobians_array = np.array([jacobian_constant for _ in range(time_steps)])
+
+    # pick out the 500th timestep and set the jacobian to 0
+    jacobians_array[500] = np.zeros((nq + nv, nq + nv))
+
+
+    # write the jacobians to stored data/one_bounce
+    saved_data_dir = os.path.join(BASE_DIR, "stored_data", ExperimentType.ONE_BOUNCE)
+    os.makedirs(saved_data_dir, exist_ok=True)  # Ensure the directory exists
+    np.save(os.path.join(saved_data_dir, f"jacobians_analytic.npy"), jacobians_array)
+
 
 def main():
-    states, jacobians = get_states_jacobians("one_bounce", "fd")
-    print(len(states), len(jacobians))
-    # print a random jacobian
-    model, _, _, _ = build_environment("one_bounce")
 
-    print_state_jacobian(jacobians[0], model)
+    experiment = ExperimentType.ONE_BOUNCE # setting the experiment to one bounce
+
+    xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
+    model = mujoco.MjModel.from_xml_path(filename=xml_path)
+    states_fd, jacobians_fd = get_experiment_data(experiment, GradientMode.FD)
+    states_ad, jacobians_ad = get_experiment_data(experiment, GradientMode.AUTODIFF)
+    states_implicit_jaxopt, jacobians_implicit_jaxopt = get_experiment_data(experiment, GradientMode.IMPLICIT_JAXOPT)
+    states_implicit_lax, jacobians_implicit_lax = get_experiment_data(experiment, GradientMode.IMPLICIT_LAX)
+
+    # print a random jacobian
+    #print_state_jacobian(jacobians_ad[600], model)
+
+    # compare the jacobians
+    error_stats = compare_jacobians(jacobians_implicit_jaxopt, jacobians_fd, GradientMode.IMPLICIT_JAXOPT, GradientMode.FD)
+    print(error_stats)
+
+
 
 if __name__ == "__main__":
     main()
