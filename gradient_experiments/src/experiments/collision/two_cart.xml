@@ -1,0 +1,70 @@
+<mujoco model="cart">
+
+    <option timestep="0.01" impratio="10" iterations="100" ls_iterations="20">
+        <flag contact="enable" gravity="enable" eulerdamp="disable"/>
+    </option>
+
+    <!--  reduce contact computation for mjx -->
+     <custom>
+        <numeric data="15" name="max_contact_points"/>
+        <numeric data="15" name="max_geom_pairs"/>
+      </custom>
+
+    <visual>
+        <headlight ambient=".4 .4 .4" diffuse=".8 .8 .8" specular="0.1 0.1 0.1"/>
+        <map znear=".01"/>
+        <quality shadowsize="2048"/>
+    </visual>
+
+    <asset>
+        <texture name="skybox" type="skybox" builtin="gradient" rgb1=".4 .6 .8" rgb2="0 0 0"
+                 width="800" height="800" mark="random" markrgb="1 1 1"/>
+    </asset>
+
+    <asset>
+        <texture name="grid" type="2d" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="300" height="300" mark="edge" markrgb=".2 .3 .4"/>
+        <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance=".2"/>
+        <material name="self" rgba=".7 .5 .3 1"/>
+        <material name="cart2_material" rgba=".3 .7 .3 1"/> <!-- Different color for second cart -->
+        <material name="decoration" rgba=".3 .5 .7 1"/>
+    </asset>
+
+    <worldbody>
+        <light name="light" pos="0 0 6"/>
+        <camera name="fixed" pos="0 -4 1" zaxis="0 -1 0"/>
+        <camera name="lookatcart" mode="targetbody" target="cart1" pos="0 -2 2"/>
+        <geom name="floor" pos="0 0 -.05" size="4 4 .2" type="plane" material="grid"/>
+
+        <!-- Rails for visual guidance -->
+        <body name="rails">
+            <geom name="rail1" type="capsule" pos="0  .07 1" zaxis="1 0 0" size="0.02 4" material="decoration"/>
+            <geom name="rail2" type="capsule" pos="0 -.07 1" zaxis="1 0 0" size="0.02 4" material="decoration"/>
+        </body>
+
+
+        <!-- First Cart -->
+        <body name="cart1" pos="0 0 1">
+            <joint name="slider1" type="slide" limited="false" axis="1 0 0" range="-1.8 1.8"/>
+            <geom name="cart_geom1" type="box" size="0.2 0.15 0.1" material="self" mass="1" contype="1" conaffinity="1"/>
+        </body>
+
+        <!-- Second Cart -->
+        <body name="cart2" pos="1 0 1"> <!-- Positioned slightly apart -->
+            <joint name="slider2" type="slide" limited="false" axis="1 0 0" range="-1.8 1.8"/>
+            <geom name="cart_geom2" type="box" size="0.2 0.15 0.1" material="cart2_material" mass="1" contype="1" conaffinity="1"/>
+        </body>
+
+    </worldbody>
+
+    <contact>
+        <exclude body1="rails" body2="cart1"/>
+        <exclude body1="rails" body2="cart2"/>
+    </contact>
+
+
+    <actuator>
+        <motor name="slide1" joint="slider1" gear="10" ctrllimited="false" ctrlrange="-1 1"/>
+        <!--<motor name="slide2" joint="slider2" gear="10" ctrllimited="false" ctrlrange="-1 1"/> -->
+    </actuator>
+
+</mujoco>

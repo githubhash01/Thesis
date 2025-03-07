@@ -1,20 +1,23 @@
 import jax
-from jaxtyping import PyTree
 import jax.numpy as jnp
 from mujoco import mjx
 from jax import config
 from dataclasses import dataclass
 from typing import Callable, Optional, Set
-import equinox
+import mujoco
 from jax.flatten_util import ravel_pytree
 import numpy as np
 from jax._src.util import unzip2
 import time
+from mujoco import viewer
 
 config.update('jax_default_matmul_precision', 'high')
 config.update("jax_enable_x64", True)
 
 
+"""
+Helper Functions
+"""
 def upscale(x):
     if 'dtype' in dir(x):
         if x.dtype == jnp.int32:
@@ -23,10 +26,93 @@ def upscale(x):
             return jnp.float64(x)
     return x
 
+def set_control(dx, u):
+    return dx.replace(ctrl=dx.ctrl.at[:].set(u))
+
+"""
+Hashim's Step Functions 
+"""
+
+# Default - Autodiff
+def make_step_fn(model, mjx_data):
+
+    @jax.jit
+    def step_fn(state):
+        nq = model.nq
+        qpos, qvel = state[:nq], state[nq:]
+        dx = mjx_data.replace(qpos=qpos, qvel=qvel)
+        dx_next = mjx.step(model, dx)
+        next_state = jnp.concatenate([dx_next.qpos, dx_next.qvel])
+        return next_state
+
+    return step_fn
+
+# --- Finite Differences ---
+def make_step_fn_fd(mjx_model, mjx_data):
+    epsilon = 1e-6
+
+    # This function performs the actual step computation.
+    @jax.jit
+    def _step_fn(state):
+        nq = mjx_model.nq
+        qpos, qvel = state[:nq], state[nq:]
+        dx = mjx_data.replace(qpos=qpos, qvel=qvel)
+        dx_next = mjx.step(mjx_model, dx)
+        next_state = jnp.concatenate([dx_next.qpos, dx_next.qvel])
+        return next_state
+
+    # Define the custom_vjp-decorated function.
+    @jax.custom_vjp
+    def step_fn(state):
+        return _step_fn(state)
+
+    # Forward pass: compute the output and return the input (or any auxiliary data)
+    def step_fn_fwd(s):
+        f_s = _step_fn(s)
+        return f_s, s  # saving s for use in backward pass
+
+    # Backward pass: given the saved s and the incoming cotangent,
+    # compute the vector-Jacobian product using finite differences.
+    def step_fn_bwd(s, cotangent):
+        #jax.debug.print("Using finite differences for VJP")
+        f_s = _step_fn(s)  # compute baseline output once
+        grad = []
+        for j in range(s.shape[0]):
+            # Create a perturbation along the j-th coordinate.
+            e_j = jnp.zeros_like(s).at[j].set(1.0)
+            # Evaluate the function at the perturbed state.
+            f_perturbed = _step_fn(s + epsilon * e_j)
+            # Approximate the partial derivative for coordinate j.
+            diff = (f_perturbed - f_s) / epsilon
+            # Multiply by the cotangent to get the j-th component of the VJP.
+            grad_j = jnp.vdot(cotangent, diff)
+            grad.append(grad_j)
+        grad = jnp.stack(grad)
+        return (grad,)
+
+    # Register the forward and backward functions with the custom_vjp mechanism.
+    step_fn.defvjp(step_fn_fwd, step_fn_bwd)
+    return step_fn
+
+"""
+Daniel's FD-based step function
+"""
 
 # -------------------------------------------------------------
 # Finite-difference cache
 # -------------------------------------------------------------
+
+def make_step_fn_default(mx, set_control_fn):
+    jax.debug.print("DEFAULT")
+
+    def step_fn(dx: mjx.Data, u: jnp.ndarray = None):
+        if u:
+            return mjx.step(mx, set_control_fn(dx, u))
+        else:
+            return mjx.step(mx, dx)
+
+    return step_fn
+
 @dataclass(frozen=True)
 class FDCache:
     """Holds all the precomputed info needed by the custom FD-based backward pass."""
@@ -97,30 +183,19 @@ def build_fd_cache(
     )
 
 
-# DEFAULT #
-def make_step_fn_default(mx, set_control_fn):
-    jax.debug.print("DEFAULT")
-
-    def step_fn(dx: mjx.Data, u: jnp.ndarray):
-        dx_with_ctrl = set_control_fn(dx, u)
-        return mjx.step(mx, dx_with_ctrl)
-
-    return step_fn
-
-
 # -------------------------------------------------------------
 # Step function with custom FD-based derivative
 # -------------------------------------------------------------
-def make_step_fn(
+def make_step_fn_fd_cache(
         mx,
         set_control_fn: Callable,
         fd_cache: FDCache
 ):
-    jax.debug.print("Using FD-based step function")
     """
     Create a custom_vjp step function that takes (dx, u) and returns dx_next.
     We do finite differences (FD) in the backward pass using the info in fd_cache.
     """
+
 
     @jax.custom_vjp
     def step_fn(dx: mjx.Data, u: jnp.ndarray):
@@ -226,165 +301,51 @@ def make_step_fn(
     return step_fn
 
 
-# -------------------------------------------------------------
-# Simulate a trajectory
-# -------------------------------------------------------------
-@equinox.filter_jit
-def simulate_trajectories(
-        mx,
-        qpos_inits,  # shape (B, nq) for example
-        qvel_inits,  # shape (B, nqvel)
-        running_cost_fn,
-        terminal_cost_fn,
-        step_fn,
-        params,
-        static,
-        length,
-        keys
-):
-    """
-    Simulate a *batch* of trajectories (B of them) with a single policy.
+"""
+Simulation Loop 
+"""
 
-    Args:
-      mx: MuJoCo model container.
-      qpos_inits: shape (B, n_qpos)
-      qvel_inits: shape (B, n_qvel)
-      running_cost_fn, terminal_cost_fn: same cost structure as before.
-      step_fn: the custom FD-based step function returned by make_step_fn.
-      params, static: your policy parameters & static parts (from equinox.partition).
-      length: number of steps per trajectory.
-    Returns:
-      - states_batched: shape (B, length, 2 * n_qpos) (if that’s your total state dimension)
-      - total_cost: a scalar cost (mean or sum across the batch).
-    """
-    # Combine the param & static into the actual model (same as simulate_trajectory).
-    model = equinox.combine(params, static)
+def simulate(mjx_data, num_steps, step_function):
+    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+    states = [state]
+    state_jacobians = []
 
-    def single_trajectory(qpos_init, qvel_init, key):
-        """Simulate one trajectory given a single (qpos_init, qvel_init)."""
-        # Build the initial MuJoCo data
-        dx0 = mjx.make_data(mx)
-        dx0 = jax.tree_map(upscale, dx0)
-        dx0 = dx0.replace(qpos=dx0.qpos.at[:].set(qpos_init))
-        dx0 = dx0.replace(qvel=dx0.qvel.at[:].set(qvel_init))
+    jac_fn_rev = jax.jit(jax.jacrev(step_function))
 
-        # dx0 = mjx.step(mx, dx0)
+    for _ in range(num_steps):
+        J_s = jac_fn_rev(state)
+        state_jacobians.append(J_s)
+        state = step_function(state)
+        states.append(jnp.array(state))
 
-        # Define the scanning function for a single rollout
-        def scan_step_fn(carry, _):
-            dx, key = carry
-            key, subkey = jax.random.split(key)
+    states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
+    return states, state_jacobians
 
-            x = jnp.concatenate([dx.qpos, dx.qvel, dx.sensordata])
-
-            # Add noise to the control
-            noise = 0. * jax.random.normal(subkey, mx.nu)
-            # jax.debug.print("noise : {}", noise)
-            u = model(x, dx.time) + noise  # policy output
-            dx = dx.replace(ctrl=dx.ctrl.at[:].set(u))
-            c = running_cost_fn(dx)
-            dx = step_fn(dx, u)  # FD-based MuJoCo step
-            state = jnp.concatenate([dx.qpos, dx.qvel, dx.sensordata])
-            return (dx, key), (state, c, u)
-
-        key, subkey = jax.random.split(key)
-        (dx_final, _), (states, costs, u) = jax.lax.scan(scan_step_fn, (dx0, subkey), length=length - 1)
-
-        total_cost = jnp.sum(costs) + terminal_cost_fn(dx_final)
-        return states, total_cost
-
-    # vmap across the batch dimension
-    states_batched, costs_batched = jax.vmap(single_trajectory)(qpos_inits, qvel_inits, keys)
-
-    return states_batched, costs_batched
+"""
+Visualisation
+"""
 
 
-# -------------------------------------------------------------
-# Build the loss
-# -------------------------------------------------------------
-def make_loss_multi_init(
-        mx,
-        qpos_inits,  # shape (B, n_qpos)
-        qvel_inits,  # shape (B, n_qvel)
-        set_control_fn,
-        running_cost_fn,
-        terminal_cost_fn,
-        length,
-        batch_size,
-        sample_size
-):
-    """
-    Create a loss function for *multiple initial conditions*.
-    The returned function takes 'params' and 'static',
-    and returns cost aggregated across all initial conditions.
-    """
+def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01):
 
-    dx_ref = mjx.make_data(mx)
-    dx_ref = jax.tree_map(upscale, dx_ref)
+    states_np = [np.array(s) for s in states]
 
-    # Build an FD cache once, as usual
-    fd_cache = build_fd_cache(
-        dx_ref,
-        target_fields={"qpos", "qvel", "ctrl", "sensordata"},
-        eps=1e-6
-    )
-
-    # FD-based custom VJP
-    # step_fn = make_step_fn(mx, set_control_fn, fd_cache)
-    step_fn = make_step_fn_default(mx, set_control_fn)
-
-    def multi_init_loss(params, static, keys):
-        _, costs_batched = simulate_trajectories(
-            mx, qpos_inits, qvel_inits,
-            running_cost_fn, terminal_cost_fn, step_fn,
-            params, static, length, keys
-        )
-        total_cost = jnp.mean(costs_batched)  # no samples
-        return total_cost
-
-    def multi_init_loss_stoch(params, static, keys):
-        _, costs_batched = simulate_trajectories(
-            mx, qpos_inits, qvel_inits,
-            running_cost_fn, terminal_cost_fn, step_fn,
-            params, static, length, keys
-        )
-
-        costs = costs_batched.reshape(batch_size, sample_size)
-        exp_sum_costs = jnp.mean(costs, axis=-1)
-        total_cost = jnp.mean(exp_sum_costs)
-        # jax.debug.print()
-        return total_cost
-
-    return multi_init_loss_stoch
-
-
-# -------------------------------------------------------------
-# The Policy class for gradient-based optimization
-# -------------------------------------------------------------
-@dataclass
-class Policy:
-    loss: Callable[[PyTree, PyTree], float]
-
-    def solve(self, model: equinox.Module, optim, state, batch_size, max_iter=100):
-        """
-        Generic gradient descent loop on your policy parameters.
-        """
-
-        grad_loss = equinox.filter_jit(jax.jacrev(self.loss))
-        opt_model = None
-        key = jax.random.PRNGKey(10)
-        for i in range(max_iter):
-            now = time.time()
-            params, static = equinox.partition(model, equinox.is_array)
-            # Keys for random noise
-            key, subkey = jax.random.split(key, num=(2,))
-            key_batch = jax.random.split(subkey, num=(batch_size,))
-            g = grad_loss(params, static, key_batch)
-            f_val = self.loss(params, static, key_batch)
-            updates, state = optim.update(g, state, model)
-            model = equinox.apply_updates(model, updates)
-            opt_model = model
-            print(f"Iteration {i}: cost={f_val}, time={time.time() - now}")
-            # print(f"Iteration {i}: cost={f_val}")
-        return model
+    with viewer.launch_passive(m, d) as v:
+        for s in states_np:
+            step_start = time.time()
+            # Extract qpos and qvel from the state.
+            nq = m.nq
+            # We assume the state was produced as jnp.concatenate([qpos, qvel])
+            qpos = s[:nq]
+            qvel = s[nq:nq + m.nv]
+            d.qpos[:] = qpos
+            d.qvel[:] = qvel
+            mujoco.mj_forward(m, d)
+            v.sync()
+            # Optionally sleep to mimic real time.
+            time.sleep(sleep)
+            # Optionally, adjust to match the simulation timestep:
+            time_until_next = m.opt.timestep - (time.time() - step_start)
+            if time_until_next > 0:
+                time.sleep(time_until_next)
 
