@@ -27,7 +27,11 @@ def build_environment(experiment_name):
     mjx_data = mjx.put_data(mj_model, mj_data)
 
     if experiment_name == "one_bounce":
-        # update th position and velocity of the ball
+        """
+        extremely simple experiment where the ball is dropped from a height of 1.0
+        with a velocity of 2.0 downwards and to the right and bounces off the ground
+        (no gravity in this experiment) - as it is for comparing against analytic solutions
+        """
         mjx_data = mjx_data.replace(
             qpos=jnp.array([-1.0, 0.0, 1.0, 1, 0.0, 0.0, 0.0]),
             qvel=jnp.array([2.0, 0.0, -2.0, 0.0, 0.0, 0.0])
@@ -36,7 +40,11 @@ def build_environment(experiment_name):
         return mj_model, mj_data, mjx_model, mjx_data
 
     elif experiment_name == "two_cart":
-        # update the position and velocity of the carts
+        """
+        left cart starts at -0.5, right cart starts at 0.5
+        left cart has a velocity of 2.0 and collides with the right cart
+        they end up bouncing off the right wall and coming to a stop
+        """
         mjx_data = mjx_data.replace(
             qpos=jnp.array([-0.5, 0.0]),
             qvel=jnp.array([2.0, 0.0])
@@ -55,8 +63,6 @@ def build_environment(experiment_name):
         qvel = jnp.zeros(5)
         qvel = qvel.at[0].set(3) # flick the spinner
         mjx_data = mjx_data.replace(qpos=qpos, qvel=qvel)
-        jax.debug.print("Finger qpos {}", mjx_data.qpos)
-        jax.debug.print("Finger qvel {}", mjx_data.qvel)
         return mj_model, mj_data, mjx_model, mjx_data
 
     else:
@@ -100,6 +106,7 @@ def main():
     experiments = ["one_bounce", "two_cart", "finger"]
     for experiment in experiments:
         #run_experiment(experiment, "autodiff")
+        jax.debug.print("Running experiment {}", experiment)
         run_experiment(experiment, "fd")
 
     #run_experiment("one_bounce", "autodiff")
