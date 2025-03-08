@@ -3,6 +3,8 @@ import argparse
 import os
 import jax
 import jax.numpy as jnp
+jax.config.update("jax_enable_x64", True)
+jax.config.update('jax_default_matmul_precision', 'high')
 
 class GradientMode(str, Enum):
     AUTODIFF = "autodiff"
@@ -119,6 +121,10 @@ def plot_loss(loss_history):
 
 def main():
     #states, cost = simulate_trajectory(mjx_data, INIT_VEL_STAR)
+    #loss_fn = make_loss(mjx_data)
+    #free_init = jnp.array([2.5, -0.3])
+    #cost = loss_fn(free_init)
+
     #jax.debug.print("Cost: {}", cost)
     #jax.debug.print("Final Position: {}", states[-1][:7])
     #visualise_trajectory(states, mj_data, mj_model)

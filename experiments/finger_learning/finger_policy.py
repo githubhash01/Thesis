@@ -1,6 +1,14 @@
 import os
+import argparse
+# Parse the gradient mode argument.
+parser = argparse.ArgumentParser()
+parser.add_argument("--gradient_mode", type=str, default="autodiff", help="solver")
+args = parser.parse_args()
 
-os.environ["MJX_SOLVER"] = "fd"
+# Set the MuJoCo solver depending on the gradient mode.
+#os.environ["MJX_SOLVER"] = "fd" #hardcodig the solver to be finite difference
+os.environ["MJX_SOLVER"] = args.gradient_mode
+
 import jax
 #jax.config.update("jax_debug_nans", True)
 jax.config.update("jax_enable_x64", True)
@@ -110,7 +118,7 @@ class PolicyNet(equinox.Module):
 
 if __name__ == "__main__":
     # Load MuJoCo model
-    path = "/Users/hashim/Desktop/Thesis/mjx/diff_sim/xmls/finger_mjx.xml"
+    path = "/Users/hashim/Desktop/Thesis/experiments/finger_learning/finger.xml"
     model = mujoco.MjModel.from_xml_path(path)
     mx = mjx.put_model(model)
     dx_template = mjx.make_data(mx)
@@ -143,7 +151,6 @@ if __name__ == "__main__":
 
 
     def set_control(dx, u):
-        u = jax.numpy.clip(u, -5, 5)
         return dx.replace(ctrl=dx.ctrl.at[:].set(u))
 
 
