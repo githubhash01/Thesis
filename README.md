@@ -62,16 +62,23 @@ This directory is a cloned repository (`mjx_fitted_iteration`) from the research
 ## Running Experiments
 To run an experiment, use:
 ```sh
-python main.py
+mjpython experiments/main.py
 ```
 This will execute the main experiment pipeline, which includes setting up the simulation, running the solver, and storing results.
 
 ## Analysis
 Once experiments are completed, results can be analyzed using:
 ```sh
-python analysis.py
+python3 analysis.py
 ```
 This script loads stored data and processes the results to extract insights from the simulations.
+
+## Running Trajectory Optimisation
+To run the trajectory optimisation experiment, use:
+```sh
+mjpython experiments/trajectory_optimisation.py
+```
+This will optimize the trajectory of a ball rebounding from a wall using gradient mode of your choice.
 
 ## Dependencies
 - Python 3.x
