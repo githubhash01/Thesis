@@ -1,0 +1,226 @@
+% UG project example file, February 2022
+%   A minior change in citation, September 2023 [HS]
+% Do not change the first two lines of code, except you may delete "logo," if causing problems.
+% Understand any problems and seek approval before assuming it's ok to remove ugcheck.
+\documentclass[logo,bsc,singlespacing,parskip]{infthesis}
+\usepackage{ugcheck}
+
+% Include any packages you need below, but don't include any that change the page
+% layout or style of the dissertation. By including the ugcheck package above,
+% you should catch most accidental changes of page layout though.
+
+\usepackage{microtype} % recommended, but you can remove if it causes problems
+\usepackage{natbib} % recommended for citations
+\usepackage{xcolor}        % For custom colors
+\usepackage{hyperref}      % For hyperlinks
+\hypersetup{
+    colorlinks=true,       % Enable colored links
+    linkcolor=blue,        % Color for internal links
+    citecolor=blue,        % Color for citations
+    filecolor=blue,        % Color for file links
+    urlcolor=blue          % Color for URLs
+}
+
+
+\begin{document}
+\begin{preliminary}
+
+\title{Learning Optimal Actions Using Diﬀerentiable Simulation}
+
+\author{Hashim Al-Obaidi}
+
+% CHOOSE YOUR DEGREE a):
+% please leave just one of the following un-commented
+\course{Computer Science}
+
+% CHOOSE YOUR DEGREE b):
+\project{4th Year Project Report}  
+
+
+\date{\today}
+
+\abstract{
+
+Existing reinforcement learning algorithms for robotics are sample and time inefficient requiring millions of samples in order to learn a policy [SOURCE]. Research indicates that algorithms that use derivatives obtained from differentiable simulators can reduce the variance associated with policy optimisation, and learn policies more efficiently [SOURCE]. 
+
+However, there are several challenges related to the use of differentiable simulators, namely the computational cost, as well as the reliability and stability of the computed gradients [SOURCE].  
+
+This project aims to compare the accuracy and stability of gradients computed through three methodologies: auto-differentiation via MuJoCo's solver, differentiation through finite differences, and my own implementation based on the implicit function theorem. 
+
+The goal was to empirically and experimentally assess the trade-offs associated with each gradient computation method to allow for informed decision-making for trajectory optimization and reinforcement learning applications.  
+
+Preliminary results indicate that despite being slower to compute, finite differences produce the most stable gradients. Conversely, gradients obtained through auto-differentiation have been found to be unreliable during contact phases.  
+
+My implementation of the implicit function theorem demonstrates the capacity to provide accurate gradients for straightforward experiments; however, it performs inadequately for more complex tasks such as trajectory or policy optimization due to the occurrence of exploding gradients.  
+
+The primary conclusion drawn from this research is that further investigation is required to enhance the stability and rapid computation of gradients generated through auto-differentiation, as this would allow gradient-based learning to become a more viable approach. 
+}
+
+\maketitle
+
+
+\begin{acknowledgements}
+Michael Mistry (Supervisor). Extra thanks to Daniel Layeghi (PhD) 
+\end{acknowledgements}
+
+
+\tableofcontents
+\end{preliminary}
+
+% The preliminary material of your report should contain:
+% \begin{itemize}
+% \item
+% The title page.
+% \item
+% An abstract page.
+% \item
+% Declaration of ethics and own work.
+% \item
+% Optionally an acknowledgements page.
+% \item
+% The table of contents.
+% \end{itemize}
+
+% As in this example \texttt{skeleton.tex}, the above material should be
+% included between:
+% \begin{verbatim}
+% \begin{preliminary}
+%     ...
+% \end{preliminary}
+% \end{verbatim}
+% This style file uses roman numeral page numbers for the preliminary material.
+
+% The main content of the dissertation, starting with the first chapter,
+% starts with page~1. \emph{\textbf{The main content must not go beyond page~40.}}
+
+% The report then contains a bibliography and any appendices, which may go beyond
+% page~40. The appendices are only for any supporting material that's important to
+% go on record. However, you cannot assume markers of dissertations will read them.
+
+% You may not change the dissertation format (e.g., reduce the font size, change
+% the margins, or reduce the line spacing from the default single spacing). Be
+% careful if you copy-paste packages into your document preamble from elsewhere.
+% Some \LaTeX{} packages, such as \texttt{fullpage} or \texttt{savetrees}, change
+% the margins of your document. Do not include them!
+
+% Over-length or incorrectly-formatted dissertations will not be accepted and you
+% would have to modify your dissertation and resubmit. You cannot assume we will
+% check your submission before the final deadline and if it requires resubmission
+% after the deadline to conform to the page and style requirements you will be
+% subject to the usual late penalties based on your final submission time.
+
+% \section{Using Sections}
+
+% Divide your chapters into sub-parts as appropriate.
+
+% \section{Citations}
+
+% Citations, such as \citet{P1} or \citep{P2}, can be generated using
+% \texttt{BibTeX}. We recommend using the \texttt{natbib} package (default) or the newer \texttt{biblatex} system. 
+
+% You may use any consistent reference style that you prefer, including ``(Author, Year)'' citations. 
+
+\chapter{Introduction}
+
+\section{Reinforcement Learning}
+
+Reinforcement learning came about due to work done by Bellman in the 1960's on dynamic programming and probabilistic Markov chains.  
+
+-- Introduce notation for RL and key details --- 
+
+In the 2010's neural networks were taking off, and their application to reinforcement learning revived interest in the field giving birth to a new branch of RL: \textit{Deep Reinforcement Learning}. 
+
+This innovation set DeepMind on a track for incredible success - especially within the realm of games. 
+The innovation that set off Google DeepMind's incredible success RL (especially within the realm of games) was the use of \textit{Nueral Networks} to learn Q-values for states \citet{Mnih2013PlayingLearning}. DeepMind later made history with AlphaGo \citet{Silver2016MasteringSearchb}, an RL algorithm trained on the game Go that became the first AI to outperform humans, something long regarded as impossible. DeepMind would later build more advanced AI's to learn Chess, Shogi and more complex video games like Atari \cite{Schrittwieser2020MasteringModel} by learning a \textit{model} of the game so that it could predict the outcome of a given move, and not just the expected reward. 
+
+DeepMind's \textit{value-based} techniques however, are not directly transferable to the realm of robotics. This is because robotics involves far more complex state transitions, with continous actions and in continous time meaning that attempts to learn the value of each state for even simple physical problems quickly becomes infeasible due to the curse of dimensionality [SOURCE]. 
+
+Instead, reinforcement learning for robotics rely on learning the policy directly (\textit{policy optimisation}) rather than on learning the value of given states and then using this information to construct an optimal policy (although there are hybrid 'actor' 'critic' approaches which are also widely used ). [SOURCE?] 
+
+\subsection*{Review of Policy Optimization - REINFORCE}
+
+The REINFORCE algorithm is a foundational policy gradient method in reinforcement learning that seeks to optimize a parameterized policy $\pi_\theta$ to maximize the expected return $J(\pi_\theta) = \mathbb{E}_{\tau \sim \pi_\theta}[R(\tau)]$, where $R(\tau)$ denotes the cumulative reward of trajectory $\tau$.
+
+To perform gradient ascent on $J(\pi_\theta)$, we require the gradient $\nabla_\theta J(\pi_\theta)$. Utilizing the log-derivative trick, this gradient can be expressed as:
+
+\[
+\nabla_\theta J(\pi_\theta) = \mathbb{E}_{\tau \sim \pi_\theta} \left[ \sum_{t=0}^{T} \nabla_\theta \log \pi_\theta(a_t | s_t) R(\tau) \right]
+\]
+
+In practice, this expectation is approximated using a finite set of sampled trajectories $\mathcal{D} = \{\tau_i\}_{i=1}^N$, leading to the empirical estimate:
+
+\[
+\hat{g} = \frac{1}{|\mathcal{D}|} \sum_{\tau \in \mathcal{D}} \sum_{t=0}^{T} \nabla_\theta \log \pi_\theta(a_t | s_t) R(\tau)
+\]
+
+Here, $\hat{g}$ serves as a stochastic estimate of the true gradient $\nabla_\theta J(\pi_\theta)$. This estimation process is referred to as a 0th-order gradient method because it relies solely on sampled trajectories and does not require explicit knowledge of the environment's dynamics or the computation of exact gradients.
+
+\subsection*{Linking with Analytic Policy Gradient Optimization}
+
+In contrast to REINFORCE, Analytic Policy Gradient (APG) methods leverage differentiable models of the environment to compute gradients more efficiently. Assuming the state transition function $s_{t+1} = f(s_t, a_t)$ is differentiable, we can apply the chain rule to derive the gradient of the expected return with respect to the policy parameters $\theta$.
+
+The gradient $\nabla_\theta J(\pi_\theta)$ can be decomposed as:
+
+\[
+\nabla_\theta J(\pi_\theta) = \mathbb{E}_{\tau \sim \pi_\theta} \left[ \sum_{t=0}^{T} \nabla_\theta a_t \frac{\partial s_{t+1}}{\partial a_t} \nabla_{s_{t+1}} R(s_{t+1}) \right]
+\]
+
+Where:
+- $\nabla_\theta a_t = \nabla_\theta \pi_\theta(a_t | s_t)$ represents the sensitivity of the action with respect to the policy parameters.
+- $\frac{\partial s_{t+1}}{\partial a_t}$ denotes the Jacobian of the state transition function with respect to the action.
+- $\nabla_{s_{t+1}} R(s_{t+1})$ is the gradient of the reward function with respect to the next state.
+
+By explicitly computing these derivatives, APG methods can achieve more accurate and potentially lower-variance gradient estimates compared to sampling-based methods like REINFORCE. This approach is particularly advantageous in environments where the dynamics are known and differentiable, allowing for the application of gradient-based optimization techniques directly to the policy parameters.
+
+
+
+
+\section{Differentiable Simulators}
+
+There are many different differentiable simulator's available on the market, and they can be classified by their Gradient-Method, Dynamics-Model, Contact-Model and Integrator. \citet{Newbury2024ASimulators}
+
+Policy gradient methods for reinforcement learning as well as trajectory optimisation require the calculation of derivatives of the next state with respect to the previous state and the input. 
+
+
+\chapter{Background Chapter}
+
+
+\section {MuJoCo Computation}
+
+The contact model defines how the physics simulator responds to contact with the ground, tools or other objects, yet modelling this realistically is a difficult task due to the inherently non-smooth abrupt nature of contacts. 
+
+\section {Chain Rule and Auto-Differentiation}
+
+\section {Implicit Function Theorem}
+
+\chapter{Methodology}
+
+\chapter{Results}
+
+\chapter{Conclusion}
+
+\chapter{Discussion}
+
+
+% \bibliographystyle{plain}
+\bibliographystyle{plainnat}
+\bibliography{references.bib}
+
+
+% You may delete everything from \appendix up to \end{document} if you don't need it.
+\appendix
+
+\chapter{Appendix}
+
+\section{First section}
+
+Any appendices, including any required ethics information, should be included
+after the references.
+
+Markers do not have to consider appendices. Make sure that your contributions
+are made clear in the main body of the dissertation (within the page limit).
+
+
+
+
+\end{document}

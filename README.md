@@ -6,13 +6,13 @@ This project is focused on simulating and analyzing dynamical systems in MuJoCo 
 ## Project Structure
 ```
 Thesis/
+│── solvers/                   # Contains solvers for MuJoCo simulations
+│   │── original_solver.py     # Copy of the default MuJoCo solver
+│   │── modified_solver.py     # Modified MuJoCo solver with implicit solvers
 │── experiments/                  # Contains all experiment-related scripts and data
 │   │── analysis.py               # Script for analyzing experimental results
 │   │── main.py                   # Main script to run experiments
 │   │── simulation.py              # Handles simulation logic, including state transitions and Jacobians
-│   │── solvers/                   # Contains solvers for MuJoCo simulations
-│   │   │── original_solver.py     # Copy of the default MuJoCo solver
-│   │   │── modified_solver.py     # Modified MuJoCo solver with implicit solvers
 │   │── xmls/                      # Stores models in XML format
 │   │   │── one_bounce.xml         # Model for one-bounce experiment
 │   │   │── two_cart.xml           # Model for two-cart experiment
@@ -23,6 +23,8 @@ Thesis/
 │       │── finger/                # Data for finger experiment
 │
 │── mjx/                           # Clone of the `mjx_fitted_iteration` repository from the research group
+│── Report                         # Contains the final report for the project 
+│── README.md                      # Project overview and instructions
 ```
 
 ## Components
