@@ -13,6 +13,7 @@ Thesis/
 │   │── analysis.py               # Script for analyzing experimental results
 │   │── main.py                   # Main script to run experiments
 │   │── simulation.py              # Handles simulation logic, including state transitions and Jacobians
+│   │── trajectory_optimisation.py # Trajectory optimisation on ball rebounding from the wall 
 │   │── xmls/                      # Stores models in XML format
 │   │   │── one_bounce.xml         # Model for one-bounce experiment
 │   │   │── two_cart.xml           # Model for two-cart experiment
