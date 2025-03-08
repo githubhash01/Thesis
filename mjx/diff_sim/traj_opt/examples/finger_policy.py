@@ -1,17 +1,21 @@
-import jax
+import os
 
+os.environ["MJX_SOLVER"] = "implicit_lax"
+import jax
+#jax.config.update("jax_debug_nans", True)
 jax.config.update("jax_enable_x64", True)
 jax.config.update('jax_default_matmul_precision', 'high')
+#jax.config.update("jax_debug_nans", True)
 import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
 import equinox
 import optax
 from diff_sim.traj_opt.policy import (
-    simulate_trajectories, make_loss_multi_init, make_step_fn, build_fd_cache, make_step_fn_default
+    simulate_trajectories, make_loss_multi_init, make_step_fn, build_fd_cache, make_step_fn_default, make_step_fn_vjp
 )
 from diff_sim.utils.math_helper import angle_axis_to_quaternion, quaternion_to_angle_axis
-from pathlib import Path
+
 
 def upscale(x):
     if 'dtype' in dir(x):
@@ -22,7 +26,7 @@ def upscale(x):
     return x
 
 
-def generate_initial_conditions(key: jnp.ndarray):
+def generate_inital_conditions(key: jnp.ndarray):
     # Solution of IK
     _, key = jax.random.split(key)
     sign = 2. * jax.random.bernoulli(key, 0.5) - 1.
@@ -45,6 +49,46 @@ def generate_initial_conditions(key: jnp.ndarray):
     return jnp.concatenate([q0, q1, theta])
 
 
+# def generate_inital_conditions(key):
+#     # Solution of IK
+#     _, key = jax.random.split(key)
+#     sign = 2.*jax.random.bernoulli(key, 0.5) - 1.
+
+#     # Reference target position in spinner local frame R_s
+#     _, key = jax.random.split(key, num=2)
+#     theta_l = jax.random.uniform(key, (1,), minval=0.6, maxval=2.5) # Polar Coord
+#     l_spinner = 0.22
+#     # r = jax.random.uniform(key, (1,), minval=l_spinner + 0.01, maxval=l_spinner + 0.01)
+#     r_l = l_spinner
+#     x_s,y_s = r_l*jnp.cos(theta_l), r_l*jnp.sin(theta_l) # Cartesian in R_l
+
+#     # Reference target position in finger frame R_f
+#     x, y = x_s, y_s - 0.39
+
+#     # Inverse kinematic formula
+#     l1, l2 = 0.17, 0.161
+#     q1 = sign * jnp.arccos( (x**2 + y**2 - l1**2 - l2**2)/(2*l1*l2) )
+#     q0 = jnp.arctan2(y,x) - jnp.arctan2(l2 * jnp.sin(q1), l1 + l2*jnp.cos(q1))
+
+#     # dx = dx.replace(qpos=dx.qpos.at[0].set(q0[0]))
+#     # dx = dx.replace(qpos=dx.qpos.at[1].set(q1[0]))
+
+#     # Set Mocap quaternion
+#     # _, key = jax.random.split(key)
+#     # theta_cap = jax.random.uniform(key, (1,), minval=0., maxval=3.14)
+#     # axis = jnp.array([0, -theta_cap[0], 0])
+#     # quat = angle_axis_to_quaternion(axis)
+#     # # dx = dx.replace(mocap_quat=dx.m
+#     # #                 ocap_quat.at[:].set(quat))
+#     # pos = jnp.array([-0.2, 0., -0.4])
+#     # # dx = dx.replace(mocap_pos=dx.mocap_pos.at[:].set(pos))
+
+#     _, key = jax.random.split(key, num=2)
+#     theta = jax.random.uniform(key, (1,), minval=-0.9, maxval=0.9)
+#     # dx = dx.replace(qpos=dx.qpos.at[2].set(theta[0]))
+
+#     return jnp.concatenate([q0,q1,theta])
+
 class PolicyNet(equinox.Module):
     layers: list
     act: callable
@@ -65,12 +109,9 @@ class PolicyNet(equinox.Module):
 
 
 if __name__ == "__main__":
-
     # Load MuJoCo model
-    script_dir = Path(__file__).resolve().parent
-    xml_path = str(script_dir.parents[1] / "xmls" / "finger_mjx.xml")
-    model = mujoco.MjModel.from_xml_path(xml_path)
-
+    path = "/Users/hashim/Desktop/Thesis/mjx/diff_sim/xmls/finger_mjx.xml"
+    model = mujoco.MjModel.from_xml_path(path)
     mx = mjx.put_model(model)
     dx_template = mjx.make_data(mx)
     dx_template = jax.tree.map(upscale, dx_template)
@@ -80,7 +121,7 @@ if __name__ == "__main__":
     n_samples = 1
     Nsteps, nu = 75, 2
     keys = jax.random.split(init_key, n_batch)  # Generate 100 random keys
-    qpos_inits0 = jax.vmap(generate_initial_conditions, in_axes=(0))(keys)
+    qpos_inits0 = jax.vmap(generate_inital_conditions, in_axes=(0))(keys)
 
     # Repeat the initial conditions `n_samples` times
     # Method 1: Using jax.numpy.repeat
@@ -92,43 +133,17 @@ if __name__ == "__main__":
 
 
     def running_cost(dx):
-        pos_finger = dx.qpos[2]
-        u = dx.ctrl
-
-        # touch = dx.sensordata[0]
-        # p_finger = dx.sensordata[1:4]
-        # p_target = dx.sensordata[4:7]
-
-        # l1, l2 = 0.17, 0.161
-        # q0 = dx.qpos[0]
-        # q1 = dx.qpos[1]
-        # q2 = dx.qpos[2]
-        # x_ = l1 * jnp.cos(q0) + l2 * jnp.cos(q1+q0)
-        # y_ = l1 * jnp.sin(q0) + l2 * jnp.sin(q1+q0)
-
-        # Target position in spinner frame
-        # l_spinner = 0.22
-
-        # x_s, y_s = -l_spinner * jnp.sin(q2), l_spinner * jnp.cos(q2)
-        # # Reference target position in finger frame R_f
-        # xt, yt = x_s, y_s - 0.39
-        # p_target = jnp.array([xt, yt])
-        # p_finger = jnp.array([x_, y_])
-
-        # return 0.00005 * jnp.sum(u ** 2) + 0.1 * jnp.sum((p_finger - p_target)**2) + 0.001 * touch * pos_finger **2
-        return 0.0002 * jnp.sum(u ** 2) + 0.001 * pos_finger ** 2
+        cost = 0.0002 * jnp.sum(dx.ctrl ** 2) + 0.001 * dx.qpos[2] ** 2
+        return cost
 
 
     def terminal_cost(dx):
-        pos_finger = dx.qpos[2]
-        # touch = dx.sensordata[0]
-        # p_finger = dx.sensordata[1:4]
-        # p_target = dx.sensordata[4:7]
-        # return  10. * jnp.sum((p_finger - p_target)**2) + 4.* touch * pos_finger**2
-        return 4 * pos_finger ** 2
+        cost = 4 * dx.qpos[2] ** 2
+        return cost
 
 
     def set_control(dx, u):
+        u = jax.numpy.clip(u, -5, 5)
         return dx.replace(ctrl=dx.ctrl.at[:].set(u))
 
 
@@ -159,12 +174,22 @@ if __name__ == "__main__":
     from diff_sim.traj_opt.policy import Policy
 
     optimizer = Policy(loss=loss_fn)
-    optimal_nn = optimizer.solve(nn, adam, opt_state, batch_size=n_batch * n_samples, max_iter=1000)
+    optimal_nn = optimizer.solve(nn, adam, opt_state, batch_size=n_batch * n_samples, max_iter=50)
 
-    # fd_cache = build_fd_cache(dx_template)
-    # step_fn = make_step_fn(mx, set_control, fd_cache)
-    step_fn = make_step_fn_default(mx, set_control)
-    # Evaluate final performance *on the entire batch*
+    fd_cache = build_fd_cache(dx_template)
+
+    # use the finite difference step function if FD is enabled
+    if os.environ.get('MJX_SOLVER') == 'fd':
+        print("finger_policy: Using FD-based step function")
+        step_fn = make_step_fn(mx, set_control, fd_cache)
+    # otherwise use the default step function
+    else:
+        print("finger_policy: Using default step function")
+        step_fn = make_step_fn_default(mx, set_control)
+       # step_fn = make_step_fn_vjp(mx, set_control)
+
+
+    # Evaluate final performance *on the entire batch*`
     params, static = equinox.partition(optimal_nn, equinox.is_array)
     _, subkey = jax.random.split(init_key, num=(2,))
     key_batch = jax.random.split(subkey, num=(n_batch * n_samples,))

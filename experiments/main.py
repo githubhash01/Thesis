@@ -4,6 +4,7 @@ import os
 from jax import numpy as jnp
 import numpy as np
 
+
 class ExperimentType(str, Enum):
     ONE_BOUNCE = "one_bounce"
     TWO_CART = "two_cart"
@@ -24,13 +25,8 @@ Specify the gradient mode to use for the experiment
 parser = argparse.ArgumentParser()
 parser.add_argument("--gradient_mode", type=str, default="autodiff", help="solver")
 args = parser.parse_args()
-
 # set the MuJoCo solver depending on the gradient mode
-if args.gradient_mode == GradientMode.AUTODIFF or args.gradient_mode == GradientMode.FD:
-    os.environ["MJX_SOLVER"] = "default"
-else:
-    os.environ["MJX_SOLVER"] =  args.gradient_mode
-
+os.environ["MJX_SOLVER"] = args.gradient_mode
 """
 Now we can import mujoco modules, having set the solver
 """
@@ -53,6 +49,7 @@ from simulation import (
 
 def build_environment(experiment):
     xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
+    #xml_path = "/Users/hashim/Desktop/Thesis/mjx/diff_sim/xmls/finger_mjx.xml"
     mj_model = mujoco.MjModel.from_xml_path(filename=xml_path)
     mj_data = mujoco.MjData(mj_model)
     mjx_model = mjx.put_model(mj_model)

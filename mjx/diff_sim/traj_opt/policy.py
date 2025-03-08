@@ -10,6 +10,7 @@ from jax.flatten_util import ravel_pytree
 import numpy as np
 from jax._src.util import unzip2
 import time
+import os
 
 config.update('jax_default_matmul_precision', 'high')
 config.update("jax_enable_x64", True)
@@ -99,14 +100,51 @@ def build_fd_cache(
 
 # DEFAULT #
 def make_step_fn_default(mx, set_control_fn):
-    jax.debug.print("DEFAULT")
 
+    @jax.jit
     def step_fn(dx: mjx.Data, u: jnp.ndarray):
         dx_with_ctrl = set_control_fn(dx, u)
         return mjx.step(mx, dx_with_ctrl)
 
     return step_fn
 
+def make_step_fn_vjp(mx, set_control_fn):
+    """
+    Creates a step function using custom VJP, but relies on autodiff for gradients.
+    """
+
+    @jax.custom_vjp
+    def step_fn(dx: mjx.Data, u: jnp.ndarray):
+        """
+        Forward pass: Takes system state (dx) and control input (u),
+        applies control, and advances the simulation.
+        """
+        dx_with_ctrl = set_control_fn(dx, u)
+        dx_next = mjx.step(mx, dx_with_ctrl)
+        return dx_next
+
+    def step_fn_fwd(dx, u):
+        """
+        Forward mode: Returns dx_next along with auxiliary data for backward pass.
+        """
+        dx_next = step_fn(dx, u)
+        return dx_next, (dx, u, dx_next)
+
+    def step_fn_bwd(res, g):
+        """
+        Backward mode: Uses automatic differentiation (autodiff) with jax.vjp to compute gradients efficiently.
+        """
+        dx_in, u_in, dx_next = res
+
+        _, vjp_fn = jax.vjp(step_fn, dx_in, u_in)
+        d_x, d_u = vjp_fn(g)
+
+        return d_x, d_u
+
+    # Register the custom VJP
+    step_fn.defvjp(step_fn_fwd, step_fn_bwd)
+
+    return step_fn
 
 # -------------------------------------------------------------
 # Step function with custom FD-based derivative
@@ -116,7 +154,6 @@ def make_step_fn(
         set_control_fn: Callable,
         fd_cache: FDCache
 ):
-    jax.debug.print("Using FD-based step function")
     """
     Create a custom_vjp step function that takes (dx, u) and returns dx_next.
     We do finite differences (FD) in the backward pass using the info in fd_cache.
@@ -330,8 +367,15 @@ def make_loss_multi_init(
     )
 
     # FD-based custom VJP
-    # step_fn = make_step_fn(mx, set_control_fn, fd_cache)
-    step_fn = make_step_fn_default(mx, set_control_fn)
+    # use the finite difference step function if FD is enabled
+    if os.environ.get('MJX_SOLVER') == 'fd':
+        print("policy: Using FD-based step function")
+        step_fn = make_step_fn(mx, set_control_fn, fd_cache)
+    # otherwise use the default step function
+    else:
+        print("policy: Using default step function")
+        step_fn = make_step_fn_default(mx, set_control_fn)
+        #step_fn = make_step_fn_vjp(mx, set_control_fn)
 
     def multi_init_loss(params, static, keys):
         _, costs_batched = simulate_trajectories(

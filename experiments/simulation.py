@@ -338,12 +338,12 @@ def simulate_(mjx_data, num_steps, step_function):
         return jnp.concatenate([dx_next.qpos, dx_next.qvel])
 
     # JIT compile the Jacobian function of the state wrapper.
-    jac_fn_rev = jax.jit(jax.jacrev(state_wrapper))
+    #jac_fn_rev = jax.jit(jax.jacrev(state_wrapper))
 
     for _ in range(num_steps):
         # Compute the Jacobian of the state transition.
-        J_s = jac_fn_rev(state)
-        state_jacobians.append(J_s)
+        #J_s = jac_fn_rev(state)
+        #state_jacobians.append(J_s)
         # Update the state using the wrapped step function.
         state = state_wrapper(state)
         states.append(state)
