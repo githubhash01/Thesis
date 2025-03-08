@@ -36,6 +36,8 @@ This directory contains all the code related to running experiments, simulations
 - **`main.py`**: The primary entry point for running experiments. It initializes simulations and calls relevant functions from `simulation.py`.
 - **`simulation.py`**: Defines simulation functions, including state transitions and Jacobian computations, using different MuJoCo solvers.
 - **`analysis.py`**: Handles result processing and analysis, extracting insights from the stored simulation data.
+- **`trajectory_optimisation.py`**: Contains functions for optimizing the trajectory of a ball rebounding from a wall 
+- - works well with implicit solvers, doesn't work with the default solver, and problems implementing the finite difference method 
 
 ### `solvers/`
 This directory contains solver implementations:
@@ -47,6 +49,7 @@ This directory contains XML files defining MuJoCo models for different experimen
 - `one_bounce.xml` – Single object bouncing.
 - `two_cart.xml` – Two-cart system.
 - `finger.xml` – Robotic finger dynamics.
+- `rebound.xml` - Ball rebounding from the wall
 
 ### `stored_data/`
 Contains simulation results for each experiment. The results include:

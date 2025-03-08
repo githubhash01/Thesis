@@ -41,8 +41,8 @@ import matplotlib.pyplot as plt
 
 # ---------------------------------------- START OF CODE ---------------------------------------- #
 
-# Load the two_bounce.xml environment.
-xml_path = os.path.join(BASE_DIR, "xmls", "two_bounce.xml")
+# Load the rebound.xml environment.
+xml_path = os.path.join(BASE_DIR, "xmls", "rebound.xml")
 mj_model = mujoco.MjModel.from_xml_path(filename=xml_path)
 mj_data = mujoco.MjData(mj_model)
 mjx_model = mjx.put_model(mj_model)
