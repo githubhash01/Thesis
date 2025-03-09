@@ -41,19 +41,32 @@
 
 \abstract{
 
-Existing reinforcement learning algorithms for robotics are sample and time inefficient requiring millions of samples in order to learn a policy [SOURCE]. Research indicates that algorithms that use derivatives obtained from differentiable simulators can reduce the variance associated with policy optimisation, and learn policies more efficiently [SOURCE]. 
+Existing reinforcement learning algorithms for robotics are sample and time inefficient requiring millions of
+samples in order to learn a policy [SOURCE]. Research indicates that algorithms that use derivatives obtained
+from differentiable simulators can reduce the variance associated with policy optimisation,
+and learn policies more efficiently [SOURCE].
 
-However, there are several challenges related to the use of differentiable simulators, namely the computational cost, as well as the reliability and stability of the computed gradients [SOURCE].  
+However, there are several challenges related to the use of differentiable simulators,
+namely the computational cost, as well as the reliability and stability of the computed gradients [SOURCE]
 
-This project aims to compare the accuracy and stability of gradients computed through three methodologies: auto-differentiation via MuJoCo's solver, differentiation through finite differences, and my own implementation based on the implicit function theorem. 
+This project aims to compare the accuracy and stability of gradients computed through three methodologies:
+auto-differentiation via MuJoCo's solver, differentiation through finite differences, and my own implementation
+based on the implicit function theorem.
 
-The goal was to empirically and experimentally assess the trade-offs associated with each gradient computation method to allow for informed decision-making for trajectory optimization and reinforcement learning applications.  
+The goal was to empirically and experimentally assess the trade-offs associated with each gradient computation
+method to allow for informed decision-making for trajectory optimization and reinforcement learning applications.
 
-Preliminary results indicate that despite being slower to compute, finite differences produce the most stable gradients. Conversely, gradients obtained through auto-differentiation have been found to be unreliable during contact phases.  
+Preliminary results indicate that despite being slower to compute, finite differences produce the most stable
+gradients. Conversely, gradients obtained through auto-differentiation have been found to be unreliable during
+contact phases.
 
-My implementation of the implicit function theorem demonstrates the capacity to provide accurate gradients for straightforward experiments; however, it performs inadequately for more complex tasks such as trajectory or policy optimization due to the occurrence of exploding gradients.  
+My implementation of the implicit function theorem demonstrates the capacity to provide accurate gradients
+for straightforward experiments; however, it performs inadequately for more complex tasks such as trajectory
+or policy optimization due to the occurrence of exploding gradients.
 
-The primary conclusion drawn from this research is that further investigation is required to enhance the stability and rapid computation of gradients generated through auto-differentiation, as this would allow gradient-based learning to become a more viable approach. 
+The primary conclusion drawn from this research is that further investigation is required to enhance the
+stability and rapid computation of gradients generated through auto-differentiation, as this would allow
+gradient-based learning to become a more viable approach.
 }
 
 \maketitle
@@ -187,13 +200,46 @@ Policy gradient methods for reinforcement learning as well as trajectory optimis
 
 \section {MuJoCo Computation}
 
-The contact model defines how the physics simulator responds to contact with the ground, tools or other objects, yet modelling this realistically is a difficult task due to the inherently non-smooth abrupt nature of contacts. 
+The contact model defines how the physics simulator responds to contact with the ground, tools or other objects,
+yet modelling this realistically is a difficult task due to the inherently non-smooth abrupt nature of contacts.
 
 \section {Chain Rule and Auto-Differentiation}
 
 \section {Implicit Function Theorem}
 
 \chapter{Methodology}
+
+\section*{Environments}
+
+\subsection*{One Bounce}
+
+The bounce environment consists of a walled enclosure, a ball and the floor.
+The environment models the ball being projected at a velocity
+v = [2, 0, -2] i.e. to the right and downwards (without gravity) to the ground and then bouncing back up.
+This environment and idea comes from \citet{Suh2022DoGradients} and the purpose is to be able to compare
+the gradients produced against an \texit{analytic} or \texit{ground truth} gradient.
+In \citet{Suh2022DoGradients} the researchers considered the analytic ground truth gradient of
+d(final_position)/d(start_position) (both in terms of y and x),
+however this was only possible because in each of the differentiable simulators they were using, they
+could manually coefficient of restitution and therefore they could be exact about the final position.
+
+Research here titled "SimBenchmark" verifies that MuJoCo is unable to simulate elastic collisions
+(not a paper just a website) {https://leggedrobotics.github.io/SimBenchmark/bouncing/}.
+This is because of MuJoCo's soft contact model. Instead MuJoCo let's you define 'solref' and 'solimp' values.
+I did my best to modify these values to give the most elastic collision.
+
+Even though the final position is not exact, the state transition is.
+As such, instead of looking at the gradients of the final position, I instead look at the state transition jacobians
+df/ds where f is the state transition function, and s is the state (q, v).
+
+State Transition:
+
+q' = q + delta_t * v
+v
+
+\subsection*{Finger}
+
+This is an environment taken from Daniel.
 
 \chapter{Results}
 
