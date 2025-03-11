@@ -41,7 +41,8 @@ def make_step_fn(model, mjx_data):
         nq = model.nq
         qpos, qvel = state[:nq], state[nq:]
         dx = mjx_data.replace(qpos=qpos, qvel=qvel)
-        dx_next = mjx.step(model, dx)
+        #dx_next = mjx.step(model, dx)
+        dx_next = mjx.forward(model, dx) # apparently necessary to update the xpos
         next_state = jnp.concatenate([dx_next.qpos, dx_next.qvel])
         return next_state
 
@@ -308,16 +309,23 @@ def simulate(mjx_data, num_steps, step_function):
     states = [state]
     state_jacobians = []
 
-    jac_fn_rev = jax.jit(jax.jacrev(step_function))
+    #jac_fn_rev = jax.jit(jax.jacrev(step_function))
 
     for _ in range(num_steps):
-        J_s = jac_fn_rev(state)
-        state_jacobians.append(J_s)
+        #J_s = jac_fn_rev(state)
+        #state_jacobians.append(J_s)
         state = step_function(state)
         states.append(jnp.array(state))
 
     states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
     return states, state_jacobians
+
+def simulate_data(mjx_data, num_steps, step_function):
+
+    for _ in range(num_steps):
+        mjx_data = step_function(mjx_data, u=jnp.zeros(mjx_data.ctrl.shape))
+
+    return mjx_data
 
 # simulate dx data structures
 def simulate_(mjx_data, num_steps, step_function):
@@ -361,22 +369,39 @@ def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01
 
     states_np = [np.array(s) for s in states]
 
+    spinner_tip_site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "target_site")
+    target_site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "target_decoration")
+
     with viewer.launch_passive(m, d) as v:
         for s in states_np:
+
+            spinner_tip = d.site_xpos[spinner_tip_site]
+            target = d.geom_xpos[target_site]
+
+            print(f"spinner tip: {spinner_tip}")
+            capsule_pos_star = d.qpos[3:]
+            print(f"target*: {target}")
+            distance = np.linalg.norm(spinner_tip - target)
+            print(f"Distance between spinner tip and target: {distance:.4f}")
             step_start = time.time()
             # Extract qpos and qvel from the state.
             nq = m.nq
             # We assume the state was produced as jnp.concatenate([qpos, qvel])
             qpos = s[:nq]
             qvel = s[nq:nq + m.nv]
+            #print(qvel)
             d.qpos[:] = qpos
             d.qvel[:] = qvel
             mujoco.mj_forward(m, d)
             v.sync()
             # Optionally sleep to mimic real time.
+
+            #print(qpos)
+            # print the position of the spinner only
+            #print(qpos[3:])
             time.sleep(sleep)
             # Optionally, adjust to match the simulation timestep:
-            time_until_next = m.opt.timestep - (time.time() - step_start)
-            if time_until_next > 0:
-                time.sleep(time_until_next)
+            #time_until_next = m.opt.timestep - (time.time() - step_start)
+            #if time_until_next > 0:
+            #    time.sleep(time_until_next)
 

@@ -3,7 +3,7 @@ import argparse
 import os
 from jax import numpy as jnp
 import numpy as np
-
+import jax
 
 class ExperimentType(str, Enum):
     ONE_BOUNCE = "one_bounce"
@@ -88,9 +88,9 @@ def build_environment(experiment):
         distal joint has a velocity placed on it so that it flicks the spinner
         """
 
-        qpos = jnp.array([-1.57079633, -1.57079633, 1.0, 0.0, 0.0, 0.0])
+        qpos = jnp.array([-1.57079633, -1.57079633, 1, 0.0, 0.0, 0.0])
         qvel = jnp.zeros(5)
-        qvel = qvel.at[0].set(1.5) # flick the spinner
+        qvel = qvel.at[0].set(1.8) # flick the spinner
         mjx_data = mjx_data.replace(qpos=qpos, qvel=qvel)
         return mj_model, mj_data, mjx_model, mjx_data
 
@@ -101,20 +101,20 @@ def run_experiment(experiment, visualise=False):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
 
     # TODO - DANIEL'S FD IMPLEMENTATION
-    """
+
     if args.gradient_mode == GradientMode.FD:
         dx_template = mjx.make_data(mjx_model)
         dx_template = jax.tree.map(upscale, dx_template)
         fd_cache = build_fd_cache(dx_template)
         step_function = make_step_fn_fd_cache(mjx_model, set_control, fd_cache)
+    else:
+        step_function = make_step_fn(mjx_model, mjx_data)
     """
-
     if args.gradient_mode == GradientMode.FD:
         # alternatively use the standard finite difference method
         step_function = make_step_fn_fd(mjx_model, mjx_data)
+    """
 
-    else:
-        step_function = make_step_fn(mjx_model, mjx_data)
 
     states, jacobians = simulate(
         mjx_data=mjx_data,
@@ -126,6 +126,11 @@ def run_experiment(experiment, visualise=False):
     os.makedirs(saved_data_dir, exist_ok=True)  # Ensure the directory exists
     np.save(os.path.join(saved_data_dir, f"states_{args.gradient_mode}.npy"), states)
     np.save(os.path.join(saved_data_dir, f"jacobians_{args.gradient_mode}.npy"), jacobians)
+
+    # print the initial state
+    print(f"Initial state: {states[0]}")
+    # print the final state
+    print(f"Final state: {states[-1]}")
 
     # visualise the trajectory
     if visualise:

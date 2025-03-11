@@ -10,6 +10,7 @@ from jax.flatten_util import ravel_pytree
 import numpy as np
 from jax._src.util import unzip2
 import time
+import os
 
 config.update('jax_default_matmul_precision', 'high')
 config.update("jax_enable_x64", True)
@@ -97,18 +98,53 @@ def build_fd_cache(
     )
 
 
-# ---------------------
-# DEFAULT STEP FUNCTION
-# ---------------------
+# DEFAULT #
 def make_step_fn_default(mx, set_control_fn):
 
-    def step_fn(dx, u):
+    @jax.jit
+    def step_fn(dx: mjx.Data, u: jnp.ndarray):
+        dx_with_ctrl = set_control_fn(dx, u)
+        return mjx.step(mx, dx_with_ctrl)
+
+    return step_fn
+
+def make_step_fn_vjp(mx, set_control_fn):
+    """
+    Creates a step function using custom VJP, but relies on autodiff for gradients.
+    """
+
+    @jax.custom_vjp
+    def step_fn(dx: mjx.Data, u: jnp.ndarray):
+        """
+        Forward pass: Takes system state (dx) and control input (u),
+        applies control, and advances the simulation.
+        """
         dx_with_ctrl = set_control_fn(dx, u)
         dx_next = mjx.step(mx, dx_with_ctrl)
         return dx_next
 
-    return step_fn
+    def step_fn_fwd(dx, u):
+        """
+        Forward mode: Returns dx_next along with auxiliary data for backward pass.
+        """
+        dx_next = step_fn(dx, u)
+        return dx_next, (dx, u, dx_next)
 
+    def step_fn_bwd(res, g):
+        """
+        Backward mode: Uses automatic differentiation (autodiff) with jax.vjp to compute gradients efficiently.
+        """
+        dx_in, u_in, dx_next = res
+
+        _, vjp_fn = jax.vjp(step_fn, dx_in, u_in)
+        d_x, d_u = vjp_fn(g)
+
+        return d_x, d_u
+
+    # Register the custom VJP
+    step_fn.defvjp(step_fn_fwd, step_fn_bwd)
+
+    return step_fn
 
 # -------------------------------------------------------------
 # Step function with custom FD-based derivative
@@ -269,34 +305,45 @@ def simulate_trajectories(
         dx0 = dx0.replace(qpos=dx0.qpos.at[:].set(qpos_init))
         dx0 = dx0.replace(qvel=dx0.qvel.at[:].set(qvel_init))
 
+        # dx0 = mjx.step(mx, dx0)
+
         # Define the scanning function for a single rollout
         def scan_step_fn(carry, _):
             dx, key = carry
             key, subkey = jax.random.split(key)
 
-            x = jnp.concatenate([dx.qpos, dx.qvel])
+            x = jnp.concatenate([dx.qpos, dx.qvel, dx.sensordata])
 
             # Add noise to the control
-            noise = 0.2 * jax.random.normal(subkey, mx.nu)
+            noise = 0. * jax.random.normal(subkey, mx.nu)
             # jax.debug.print("noise : {}", noise)
             u = model(x, dx.time) + noise  # policy output
-
-            dx = step_fn(dx, u)  # FD-based MuJoCo step
+            jax.debug.print("control : {}", u)
+            dx = dx.replace(ctrl=dx.ctrl.at[:].set(u))
             c = running_cost_fn(dx)
-            state = jnp.concatenate([dx.qpos, dx.qvel])
-            return (dx, key), (state, c)
+            #dx = step_fn(dx, u)  # FD-based MuJoCo step
+            # add control to the state
+
+            # TODO - GET RID OF THIS
+            #dx = dx.replace(ctrl=dx.ctrl.at[:].set(u)) # add control to the state
+            dx = mjx.step(mx, dx) # step the simulation using MuJoCo's own step function (not FD)
+
+            # TODO - GET RID OF THIS (REALLY IMPORTANT)
+
+            state = jnp.concatenate([dx.qpos, dx.qvel, dx.sensordata])
+            jax.debug.print("state : {}", state)
+            return (dx, key), (state, c, u)
 
         key, subkey = jax.random.split(key)
-        (dx_final, _), (states, costs) = jax.lax.scan(scan_step_fn, (dx0, subkey), length=length)
+        (dx_final, _), (states, costs, u) = jax.lax.scan(scan_step_fn, (dx0, subkey), length=length - 1)
+
         total_cost = jnp.sum(costs) + terminal_cost_fn(dx_final)
         return states, total_cost
 
     # vmap across the batch dimension
     states_batched, costs_batched = jax.vmap(single_trajectory)(qpos_inits, qvel_inits, keys)
 
-    total_cost = jnp.mean(costs_batched)
-
-    return states_batched, total_cost
+    return states_batched, costs_batched
 
 
 # -------------------------------------------------------------
@@ -309,7 +356,9 @@ def make_loss_multi_init(
         set_control_fn,
         running_cost_fn,
         terminal_cost_fn,
-        length
+        length,
+        batch_size,
+        sample_size
 ):
     """
     Create a loss function for *multiple initial conditions*.
@@ -318,26 +367,49 @@ def make_loss_multi_init(
     """
 
     dx_ref = mjx.make_data(mx)
+    dx_ref = jax.tree_map(upscale, dx_ref)
 
     # Build an FD cache once, as usual
     fd_cache = build_fd_cache(
         dx_ref,
-        target_fields={"qpos", "qvel", "ctrl"},
+        target_fields={"qpos", "qvel", "ctrl", "sensordata"},
         eps=1e-6
     )
 
     # FD-based custom VJP
-    step_fn = make_step_fn(mx, set_control_fn, fd_cache)
+    # use the finite difference step function if FD is enabled
+    if os.environ.get('MJX_SOLVER') == 'fd':
+        print("policy: Using FD-based step function")
+        step_fn = make_step_fn(mx, set_control_fn, fd_cache)
+    # otherwise use the default step function
+    else:
+        print("policy: Using default step function")
+        step_fn = make_step_fn_default(mx, set_control_fn)
+        #step_fn = make_step_fn_vjp(mx, set_control_fn)
 
     def multi_init_loss(params, static, keys):
-        _, total_cost = simulate_trajectories(
+        _, costs_batched = simulate_trajectories(
             mx, qpos_inits, qvel_inits,
             running_cost_fn, terminal_cost_fn, step_fn,
             params, static, length, keys
         )
+        total_cost = jnp.mean(costs_batched)  # no samples
         return total_cost
 
-    return multi_init_loss
+    def multi_init_loss_stoch(params, static, keys):
+        _, costs_batched = simulate_trajectories(
+            mx, qpos_inits, qvel_inits,
+            running_cost_fn, terminal_cost_fn, step_fn,
+            params, static, length, keys
+        )
+
+        costs = costs_batched.reshape(batch_size, sample_size)
+        exp_sum_costs = jnp.mean(costs, axis=-1)
+        total_cost = jnp.mean(exp_sum_costs)
+        # jax.debug.print()
+        return total_cost
+
+    return multi_init_loss_stoch
 
 
 # -------------------------------------------------------------
@@ -369,3 +441,4 @@ class Policy:
             print(f"Iteration {i}: cost={f_val}, time={time.time() - now}")
             # print(f"Iteration {i}: cost={f_val}")
         return model
+
