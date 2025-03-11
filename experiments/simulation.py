@@ -103,11 +103,14 @@ Daniel's FD-based step function
 # Finite-difference cache
 # -------------------------------------------------------------
 
-def make_step_fn_default(mjx_model, set_control_fn):
+def make_step_fn_default(mjx_model):
 
     @jax.jit
     def step_fn(mjx_data: mjx.Data, u: jnp.ndarray):
-        return mjx.step(mjx_model, mjx_data)
+        dx = mjx_data.replace(ctrl=u)
+        dx = mjx.step(mjx_model, dx)
+        dx = mjx.forward(mjx_model, dx)
+        return dx
 
     return step_fn
 
@@ -321,11 +324,41 @@ def simulate(mjx_data, num_steps, step_function):
     return states, state_jacobians
 
 def simulate_data(mjx_data, num_steps, step_function):
+    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+    states = [state]
 
     for _ in range(num_steps):
         mjx_data = step_function(mjx_data, u=jnp.zeros(mjx_data.ctrl.shape))
+        state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+        states.append(state)
 
-    return mjx_data
+    return states, mjx_data
+
+import jax
+import jax.numpy as jnp
+
+def simulate_data_lax(mjx_data, num_steps, step_fn):
+    """Simulate forward 'num_steps' using a JAX-compatible step_fn with lax.scan."""
+    # We'll store qpos+qvel as states. If you want to store the entire mjx_data
+    # each step, we can do that, but it's more memory-intensive.
+
+    def body_fn(carry, _):
+        data = carry
+        # Apply one simulation step with zero controls (replace with your controls if needed)
+        data = step_fn(data, jnp.zeros_like(data.ctrl))
+        # Extract (qpos, qvel) as a single vector
+        state = jnp.concatenate([data.qpos, data.qvel])
+        return data, state
+
+    # initial state to store in the log
+    init_state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+
+    # run the scan over 'num_steps'
+    final_data, state_log = jax.lax.scan(body_fn, mjx_data, xs=None, length=num_steps)
+
+    # Prepend the initial state to the log so it has length = num_steps + 1
+    state_log = jnp.concatenate([init_state[None, :], state_log], axis=0)
+    return state_log, final_data
 
 # simulate dx data structures
 def simulate_(mjx_data, num_steps, step_function):
@@ -379,8 +412,7 @@ def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01
             target = d.geom_xpos[target_site]
 
             print(f"spinner tip: {spinner_tip}")
-            capsule_pos_star = d.qpos[3:]
-            print(f"target*: {target}")
+            #print(f"target*: {target}")
             distance = np.linalg.norm(spinner_tip - target)
             print(f"Distance between spinner tip and target: {distance:.4f}")
             step_start = time.time()
