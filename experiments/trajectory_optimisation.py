@@ -1,14 +1,10 @@
-from enum import Enum
 import argparse
 import os
 import jax
 import jax.numpy as jnp
-import optax # for optimisation
 
 jax.config.update("jax_enable_x64", True)
 jax.config.update('jax_default_matmul_precision', 'high')
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Parse the gradient mode argument.
 parser = argparse.ArgumentParser()
@@ -21,87 +17,63 @@ os.environ["MJX_SOLVER"] = args.gradient_mode
 # Import MuJoCo modules after setting the solver.
 import mujoco
 from mujoco import mjx
-from simulation import (
-    make_step_fn,
-    make_step_fn_default,
-    build_fd_cache,
-    make_step_fn_fd_cache,
-    simulate,
-    simulate_data,
-    simulate_data_lax,
-    upscale,
-    visualise_trajectory
-)
-
+from simulation import make_step_fn, simulate_data, visualise_trajectory, upscale
 import matplotlib.pyplot as plt
 
 # ---------------------------------------- START OF CODE ---------------------------------------- #
-xml_path = os.path.join(BASE_DIR, "xmls", "finger.xml")
+xml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xmls", "finger.xml")
 mj_model = mujoco.MjModel.from_xml_path(filename=xml_path)
 mj_data = mujoco.MjData(mj_model)
 mjx_model = mjx.put_model(mj_model)
 dx_template = mjx.make_data(mjx_model)
 mjx_data = jax.tree.map(upscale, dx_template)
 
+# set the start position of the finger
 mjx_data = mjx_data.replace(qpos=jnp.array([-1.57079633, -1.57079633, 1, 0.0, 0.0, 0.0]))
 
+# target position = [-0.08, 0.0, -0.4] (x, y, z)
+target_site = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, "target_decoration")
+# keep track of the position of the spinner tip
 spinner_tip_site = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "target_site")
 
-TARGET_POS = jnp.array([-0.08, 0.0, -0.4])  # target final position of the spinner (x, y, z)
-INIT_VEL = jnp.array([0.95, -0.2])  # there are many possible solutions
+step_function = make_step_fn(mjx_model)
 
-#step_fn = make_step_fn(mjx_model, mjx_data)
-if args.gradient_mode == "fd":
-    def set_control_fn(dx, control):
-        return dx.replace(ctrl=control)
+def simulate_trajectory(dx, finger_vel):
 
-    fd_cache =  build_fd_cache(dx_template)
-    step_function = make_step_fn_fd_cache(mjx_model,set_control_fn, fd_cache)
+    # update the finger's velocity
+    dx = dx.replace(qvel=jnp.array([finger_vel[0], finger_vel[1], 0.0, 0.0, 0.0]))
 
-else:
-    step_function = make_step_fn_default(mjx_model)
+    # simulate the trajectory with the updated velocity
+    states, dx = simulate_data(mjx_data=dx, step_function=step_function, num_steps=300)
 
-# Helper: Build the full 5D velocity from the free 2D parameters.
-def build_full_velocity(free_velocity):
-    return jnp.array([free_velocity[0], free_velocity[1], 0.0, 0.0, 0.0])
+    # calculate the distance between the final position of the spinner and the target position
+    final_position = dx.site_xpos[spinner_tip_site]
+    target_position = dx.geom_xpos[target_site]
+    distance = jnp.linalg.norm(final_position - target_position)
 
-# get the spinner tip position from the data
-def get_spinner_tip_position(dx):
-    return dx.site_xpos[spinner_tip_site]
-
-@jax.jit
-def simulate_trajectory(dx, free_velocity):
-    full_velocity = build_full_velocity(free_velocity)
-    dx = dx.replace(qvel=full_velocity)
-    states, dx = simulate_data_lax(mjx_data=dx, num_steps=300, step_fn=step_function) #JIT
-    #states, dx = simulate_data(mjx_data=dx, num_steps=300, step_function=step_function)
-    final_position = get_spinner_tip_position(dx)
-    distance = jnp.linalg.norm(final_position - TARGET_POS)
     return states, distance
 
 # Define a loss function that takes the free velocity parameters.
-def make_loss(dx):
-    def loss(free_velocity):
-        _, total_cost = simulate_trajectory(dx, free_velocity)
-        return total_cost
-    return loss
+def cost_function(free_velocity):
+    _, distance = simulate_trajectory(mjx_data, free_velocity)
+    return distance
 
-def solve(free_velocity, learning_rate=5, tol=1e-4, max_iter=10):
-    loss = make_loss(mjx_data)
-    grad_loss = jax.jit(jax.jacrev(loss))
+def solve(init_finger_vel, learning_rate=5, tol=1e-4, max_iter=10):
+    grad_loss = jax.jacrev(cost_function)
     loss_history = []  # Record the loss for each iteration.
 
+    finger_vel = init_finger_vel
     for i in range(max_iter):
-        g = grad_loss(free_velocity)
-        free_velocity = free_velocity - learning_rate * g
+        g = grad_loss(finger_vel)
+        finger_vel = finger_vel - learning_rate * g
         learning_rate *= 0.8  # Decay the learning rate.
-        f_val = loss(free_velocity)
+        f_val = cost_function(finger_vel)
         loss_history.append(f_val)
-        jax.debug.print("Iteration {}: cost={}, free_velocity={}", i, f_val, free_velocity)
+        jax.debug.print("Iteration {}: cost={}, free_velocity={}", i, f_val, finger_vel)
         if jnp.linalg.norm(g) < tol or jnp.isnan(g).any():
-            return free_velocity
+            return finger_vel
 
-    return free_velocity, loss_history
+    return finger_vel, loss_history
 
 # Visualise the converged trajectory.
 def plot_loss(loss_history):
@@ -116,15 +88,14 @@ def plot_loss(loss_history):
 
 
 def main():
-    #states, distance = simulate_trajectory(mjx_data, INIT_VEL)
+    init_finger_vel = jnp.array([0.95, -0.2])
+    #states, distance = simulate_trajectory(mjx_data, init_finger_vel)
     #visualise_trajectory(states, mj_data, mj_model)
-    #print(distance)
-    #print(states[-1])
-    optimal_velocity, loss_history = solve(INIT_VEL)
+
+    optimal_velocity, loss_history = solve(init_finger_vel)
     states, _ = simulate_trajectory(mjx_data, optimal_velocity)
     visualise_trajectory(states, mj_data, mj_model)
     #plot_loss(loss_history)
 
 if __name__ == "__main__":
-
     main()

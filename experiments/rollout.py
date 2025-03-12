@@ -2,7 +2,6 @@ from enum import Enum
 import argparse
 import os
 from jax import numpy as jnp
-import numpy as np
 import jax
 
 class ExperimentType(str, Enum):
@@ -33,23 +32,16 @@ Now we can import mujoco modules, having set the solver
 import mujoco
 from mujoco import mjx
 from simulation import (
+    make_step_fn_state,
     make_step_fn,
-    make_step_fn_fd,
-    simulate,
-    visualise_trajectory,
-
-    upscale,
-    build_fd_cache,
-    set_control,
-    make_step_fn_default, # default step function using dx instead of state
-    make_step_fn_fd_cache,
-    simulate_ # simulate function that uses the default step function
+    simulate_with_jacobians,
+    simulate_data,
+    visualise_trajectory
 )
 
 
 def build_environment(experiment):
     xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
-    #xml_path = "/Users/hashim/Desktop/Thesis/mjx/diff_sim/xmls/finger_mjx.xml"
     mj_model = mujoco.MjModel.from_xml_path(filename=xml_path)
     mj_data = mujoco.MjData(mj_model)
     mjx_model = mjx.put_model(mj_model)
@@ -88,10 +80,10 @@ def build_environment(experiment):
         distal joint has a velocity placed on it so that it flicks the spinner
         """
 
-        qpos = jnp.array([-1.57079633, -1.57079633, 1, 0.0, 0.0, 0.0])
-        qvel = jnp.zeros(5)
-        qvel = qvel.at[0].set(1.8) # flick the spinner
-        mjx_data = mjx_data.replace(qpos=qpos, qvel=qvel)
+        qpos = jnp.array([-1.57079633, -1.57079633, 1.0, 0.0, 0.0, 0.0])
+        mjx_data = mjx_data.replace(qpos=qpos)
+        init_ctrl = jnp.array([1.5, 0])
+        mjx_data = mjx_data.replace(qpos=qpos, ctrl=init_ctrl)
         return mj_model, mj_data, mjx_model, mjx_data
 
     else:
@@ -101,41 +93,32 @@ def run_experiment(experiment, visualise=False):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
 
     # TODO - DANIEL'S FD IMPLEMENTATION
+    step_function = make_step_fn_state(mjx_model, mjx_data)
 
-    if args.gradient_mode == GradientMode.FD:
-        dx_template = mjx.make_data(mjx_model)
-        dx_template = jax.tree.map(upscale, dx_template)
-        fd_cache = build_fd_cache(dx_template)
-        step_function = make_step_fn_fd_cache(mjx_model, set_control, fd_cache)
-    else:
-        step_function = make_step_fn(mjx_model, mjx_data)
-    """
-    if args.gradient_mode == GradientMode.FD:
-        # alternatively use the standard finite difference method
-        step_function = make_step_fn_fd(mjx_model, mjx_data)
-    """
-
-
-    states, jacobians = simulate(
+    states, jacobians = simulate_with_jacobians(
         mjx_data=mjx_data,
         num_steps=1000,
         step_function=step_function
     )
-
-    saved_data_dir = os.path.join(BASE_DIR, "stored_data", experiment)
-    os.makedirs(saved_data_dir, exist_ok=True)  # Ensure the directory exists
-    np.save(os.path.join(saved_data_dir, f"states_{args.gradient_mode}.npy"), states)
-    np.save(os.path.join(saved_data_dir, f"jacobians_{args.gradient_mode}.npy"), jacobians)
-
-    # print the initial state
-    print(f"Initial state: {states[0]}")
-    # print the final state
-    print(f"Final state: {states[-1]}")
-
     # visualise the trajectory
     if visualise:
         visualise_trajectory(states, mj_data, mj_model)
 
+    """
+    saved_data_dir = os.path.join(BASE_DIR, "stored_data", experiment)
+    os.makedirs(saved_data_dir, exist_ok=True)  # Ensure the directory exists
+    np.save(os.path.join(saved_data_dir, f"states_{args.gradient_mode}.npy"), states)
+    np.save(os.path.join(saved_data_dir, f"jacobians_{args.gradient_mode}.npy"), jacobians)
+    """
+
+def just_visualise(experiment):
+    mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
+
+    step_fn = make_step_fn(mjx_model)
+
+    states, mjx_data = simulate_data(mjx_data, num_steps=1000, step_function=step_fn)
+
+    visualise_trajectory(states, mj_data, mj_model)
 
 def main():
 
@@ -147,7 +130,8 @@ def main():
         run_experiment(experiment, visualise=False)
 
     """
-    run_experiment(ExperimentType.FINGER, visualise=True)
+    #run_experiment(ExperimentType.FINGER, visualise=True)
+    just_visualise(ExperimentType.FINGER)
 
 
 if __name__ == "__main__":

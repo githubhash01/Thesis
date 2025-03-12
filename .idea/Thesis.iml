@@ -5,7 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$/mjx" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/mjx/diff_sim" isTestSource="false" />
     </content>
-    <orderEntry type="jdk" jdkName="mjx" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="mjx_env" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

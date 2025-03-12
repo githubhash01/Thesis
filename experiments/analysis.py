@@ -2,9 +2,10 @@ import pandas as pd
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from main import BASE_DIR, ExperimentType, GradientMode
+from rollout import ExperimentType, GradientMode
 import mujoco
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def get_experiment_data(experiment_name, gradient_method):
     saved_data_dir = str(os.path.join(BASE_DIR, "stored_data", experiment_name))

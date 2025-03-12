@@ -33,20 +33,32 @@ def set_control(dx, u):
 Hashim's Step Functions 
 """
 
-# Default - Autodiff
-def make_step_fn(model, mjx_data):
+# Step Function for state (Jacobian) computation
+def make_step_fn_state(model, mjx_data):
 
     @jax.jit
     def step_fn(state):
         nq = model.nq
         qpos, qvel = state[:nq], state[nq:]
         dx = mjx_data.replace(qpos=qpos, qvel=qvel)
-        #dx_next = mjx.step(model, dx)
-        dx_next = mjx.forward(model, dx) # apparently necessary to update the xpos
+        dx_next = mjx.step(model, dx)
         next_state = jnp.concatenate([dx_next.qpos, dx_next.qvel])
         return next_state
 
     return step_fn
+
+# Default - Autodiff
+def make_step_fn(mjx_model):
+
+    @jax.jit
+    def step_fn(mjx_data: mjx.Data, u: jnp.ndarray):
+        dx = mjx_data.replace(ctrl=u)
+        dx = mjx.step(mjx_model, dx)
+        dx = mjx.forward(mjx_model, dx)
+        return dx
+
+    return step_fn
+
 
 # --- Finite Differences ---
 def make_step_fn_fd(mjx_model, mjx_data):
@@ -95,24 +107,74 @@ def make_step_fn_fd(mjx_model, mjx_data):
     step_fn.defvjp(step_fn_fwd, step_fn_bwd)
     return step_fn
 
+
+"""
+Simulation Loop 
+"""
+
+# simulate states and retrieve state transition jacobians
+def simulate_with_jacobians(mjx_data, num_steps, step_function):
+    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+    states = [state]
+    state_jacobians = []
+
+    jac_fn_rev = jax.jit(jax.jacrev(step_function))
+
+    for _ in range(num_steps):
+        J_s = jac_fn_rev(state)
+        state_jacobians.append(J_s)
+        state = step_function(state)
+        states.append(jnp.array(state))
+
+    states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
+    return states, state_jacobians
+
+# just simulate states using mjx_data and standard step_function
+def simulate_data(mjx_data, num_steps, step_function):
+    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+    states = [state]
+
+    for _ in range(num_steps):
+        # TODO - No Control
+        mjx_data = step_function(mjx_data, u=jnp.zeros(mjx_data.ctrl.shape))
+        state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+        states.append(state)
+
+    return states, mjx_data
+
+"""
+Visualisation
+"""
+
+def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01):
+
+    states_np = [np.array(s) for s in states]
+
+    with viewer.launch_passive(m, d) as v:
+        for s in states_np:
+            step_start = time.time()
+            # Extract qpos and qvel from the state.
+            nq = m.nq
+            # We assume the state was produced as jnp.concatenate([qpos, qvel])
+            qpos = s[:nq]
+            qvel = s[nq:nq + m.nv]
+            d.qpos[:] = qpos
+            d.qvel[:] = qvel
+            mujoco.mj_forward(m, d)
+            v.sync()
+            # Optionally sleep to mimic real time.
+            time.sleep(sleep)
+            # Optionally, adjust to match the simulation timestep:
+            time_until_next = m.opt.timestep - (time.time() - step_start)
+            if time_until_next > 0:
+                time.sleep(time_until_next)
+
+
+
+
 """
 Daniel's FD-based step function
 """
-
-# -------------------------------------------------------------
-# Finite-difference cache
-# -------------------------------------------------------------
-
-def make_step_fn_default(mjx_model):
-
-    @jax.jit
-    def step_fn(mjx_data: mjx.Data, u: jnp.ndarray):
-        dx = mjx_data.replace(ctrl=u)
-        dx = mjx.step(mjx_model, dx)
-        dx = mjx.forward(mjx_model, dx)
-        return dx
-
-    return step_fn
 
 @dataclass(frozen=True)
 class FDCache:
@@ -207,7 +269,6 @@ def make_step_fn_fd_cache(
         """
         dx_with_ctrl = set_control_fn(dx, u)
         dx_next = mjx.step(mx, dx_with_ctrl)
-        dx_next = mjx.forward(mx, dx)
         return dx_next
 
     def step_fn_fwd(dx, u):
@@ -301,140 +362,3 @@ def make_step_fn_fd_cache(
 
     step_fn.defvjp(step_fn_fwd, step_fn_bwd)
     return step_fn
-
-
-"""
-Simulation Loop 
-"""
-
-# simulate states
-def simulate(mjx_data, num_steps, step_function):
-    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-    states = [state]
-    state_jacobians = []
-
-    #jac_fn_rev = jax.jit(jax.jacrev(step_function))
-
-    for _ in range(num_steps):
-        #J_s = jac_fn_rev(state)
-        #state_jacobians.append(J_s)
-        state = step_function(state)
-        states.append(jnp.array(state))
-
-    states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
-    return states, state_jacobians
-
-def simulate_data(mjx_data, num_steps, step_function):
-    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-    states = [state]
-
-    for _ in range(num_steps):
-        mjx_data = step_function(mjx_data, u=jnp.zeros(mjx_data.ctrl.shape))
-        state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-        states.append(state)
-
-    return states, mjx_data
-
-import jax
-import jax.numpy as jnp
-
-def simulate_data_lax(mjx_data, num_steps, step_fn):
-    """Simulate forward 'num_steps' using a JAX-compatible step_fn with lax.scan."""
-    # We'll store qpos+qvel as states. If you want to store the entire mjx_data
-    # each step, we can do that, but it's more memory-intensive.
-
-    def body_fn(carry, _):
-        data = carry
-        # Apply one simulation step with zero controls (replace with your controls if needed)
-        data = step_fn(data, u=jnp.zeros_like(data.ctrl))
-        # Extract (qpos, qvel) as a single vector
-        state = jnp.concatenate([data.qpos, data.qvel])
-        return data, state
-
-    # initial state to store in the log
-    init_state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-
-    # run the scan over 'num_steps'
-    final_data, state_log = jax.lax.scan(body_fn, mjx_data, xs=None, length=num_steps)
-
-    # Prepend the initial state to the log so it has length = num_steps + 1
-    state_log = jnp.concatenate([init_state[None, :], state_log], axis=0)
-    return state_log, final_data
-
-# simulate dx data structures
-def simulate_(mjx_data, num_steps, step_function):
-    # Initial state as a concatenated vector of qpos and qvel.
-    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-    states = [state]
-    state_jacobians = []
-
-    # Wrapper that converts state vector -> mjx.Data, calls step_function, and returns a state vector.
-    def state_wrapper(state):
-        # Assuming mjx_data has nq elements in qpos.
-        nq = mjx_data.qpos.shape[0]
-        # Create a new mjx.Data with the current state.c
-        dx = mjx_data.replace(qpos=state[:nq], qvel=state[nq:])
-        # Call the step function with no control (u=None).
-        dx_next = step_function(dx, u=jnp.zeros(mjx_data.ctrl.shape))
-        # Convert the resulting mjx.Data back into a state vector.
-        return jnp.concatenate([dx_next.qpos, dx_next.qvel])
-
-    # JIT compile the Jacobian function of the state wrapper.
-    #jac_fn_rev = jax.jit(jax.jacrev(state_wrapper))
-
-    for _ in range(num_steps):
-        # Compute the Jacobian of the state transition.
-        #J_s = jac_fn_rev(state)
-        #state_jacobians.append(J_s)
-        # Update the state using the wrapped step function.
-        state = state_wrapper(state)
-        states.append(state)
-
-    # Convert lists to JAX arrays.
-    states = jnp.array(states)
-    state_jacobians = jnp.array(state_jacobians)
-    return states, state_jacobians
-
-"""
-Visualisation
-"""
-
-def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01):
-
-    states_np = [np.array(s) for s in states]
-
-    spinner_tip_site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "target_site")
-    target_site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "target_decoration")
-
-    with viewer.launch_passive(m, d) as v:
-        for s in states_np:
-
-            spinner_tip = d.site_xpos[spinner_tip_site]
-            target = d.geom_xpos[target_site]
-
-            print(f"spinner tip: {spinner_tip}")
-            #print(f"target*: {target}")
-            distance = np.linalg.norm(spinner_tip - target)
-            print(f"Distance between spinner tip and target: {distance:.4f}")
-            step_start = time.time()
-            # Extract qpos and qvel from the state.
-            nq = m.nq
-            # We assume the state was produced as jnp.concatenate([qpos, qvel])
-            qpos = s[:nq]
-            qvel = s[nq:nq + m.nv]
-            #print(qvel)
-            d.qpos[:] = qpos
-            d.qvel[:] = qvel
-            mujoco.mj_forward(m, d)
-            v.sync()
-            # Optionally sleep to mimic real time.
-
-            #print(qpos)
-            # print the position of the spinner only
-            #print(qpos[3:])
-            time.sleep(sleep)
-            # Optionally, adjust to match the simulation timestep:
-            #time_until_next = m.opt.timestep - (time.time() - step_start)
-            #if time_until_next > 0:
-            #    time.sleep(time_until_next)
-

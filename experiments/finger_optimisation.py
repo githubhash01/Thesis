@@ -28,10 +28,10 @@ os.environ["MJX_SOLVER"] = args.gradient_mode
 import mujoco
 from mujoco import mjx
 from simulation import (
-    make_step_fn,
+    make_step_fn_state,
     make_step_fn_fd,
-    make_step_fn_default,
-    simulate,
+    make_step_fn,
+    simulate_with_jacobians,
     simulate_data,
     visualise_trajectory,
 
@@ -58,7 +58,7 @@ target_site = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, "target_deco
 if args.gradient_mode == GradientMode.FD:
     step_fn = make_step_fn_fd(mjx_model, mjx_data)
 else:
-    step_fn = make_step_fn_default(mjx_model, set_control)
+    step_fn = make_step_fn(mjx_model, set_control)
 
 def build_qvel(finger_velocity):
     qvel = jnp.zeros(5)

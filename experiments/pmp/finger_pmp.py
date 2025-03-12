@@ -2,10 +2,22 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 jax.config.update('jax_default_matmul_precision', 'high')
+
+import argparse
+import os
+parser = argparse.ArgumentParser()
+parser.add_argument("--gradient_mode", type=str, default="autodiff", help="solver")
+args = parser.parse_args()
+# set the MuJoCo solver depending on the gradient mode
+os.environ["MJX_SOLVER"] = args.gradient_mode
+
+
 import mujoco
 from mujoco import mjx
 import equinox
-from diff_sim.traj_opt.pmp import PMP, make_loss
+#from diff_sim.traj_opt.pmp import PMP, make_loss
+from pmp import PMP, make_loss, simulate_trajectory
+from viz import visualise_trajectory
 
 def upscale(x):
     """Convert data to 64-bit precision."""
@@ -17,7 +29,7 @@ def upscale(x):
     return x
 
 if __name__ == "__main__":
-    path = "/Users/hashim/Desktop/Thesis/mjx/diff_sim/xmls/finger_mjx.xml"
+    path = "/Users/hashim/Desktop/Thesis/experiments/pmp/finger.xml"
     model = mujoco.MjModel.from_xml_path(path)
     mx = mjx.put_model(model)
     dx = mjx.make_data(mx)
@@ -43,12 +55,9 @@ if __name__ == "__main__":
     grad_loss_fn = equinox.filter_jit(jax.jacrev(loss_fn))
 
     optimizer = PMP(loss=loss_fn, grad_loss=grad_loss_fn)
-    optimal_U = optimizer.solve(U0, learning_rate=0.2, max_iter=50)
-
-    from diff_sim.utils.mj_viewers import visualise_traj_generic
-    from diff_sim.traj_opt.pmp import simulate_trajectory
-    import mujoco
+    optimal_U = optimizer.solve(U0, learning_rate=0.2, max_iter=500)
 
     d = mujoco.MjData(model)
-    x, cost = simulate_trajectory(mx, qpos_init, set_control, running_cost, terminal_cost, optimal_U)
-    visualise_traj_generic(jnp.expand_dims(x, axis=0), d, model)
+
+    states, _ = simulate_trajectory(mx, qpos_init, set_control, running_cost, terminal_cost, optimal_U)
+    visualise_trajectory(states, d, model)

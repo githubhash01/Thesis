@@ -62,7 +62,7 @@ This directory is a cloned repository (`mjx_fitted_iteration`) from the research
 ## Running Experiments
 To run an experiment, use:
 ```sh
-mjpython experiments/main.py
+mjpython experiments/rollout.py
 ```
 This will execute the main experiment pipeline, which includes setting up the simulation, running the solver, and storing results.
 
