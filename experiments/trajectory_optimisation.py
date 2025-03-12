@@ -24,9 +24,11 @@ from mujoco import mjx
 from simulation import (
     make_step_fn,
     make_step_fn_default,
+    build_fd_cache,
+    make_step_fn_fd_cache,
     simulate,
     simulate_data,
-simulate_data_lax,
+    simulate_data_lax,
     upscale,
     visualise_trajectory
 )
@@ -49,7 +51,15 @@ TARGET_POS = jnp.array([-0.08, 0.0, -0.4])  # target final position of the spinn
 INIT_VEL = jnp.array([0.95, -0.2])  # there are many possible solutions
 
 #step_fn = make_step_fn(mjx_model, mjx_data)
-step_function = make_step_fn_default(mjx_model)
+if args.gradient_mode == "fd":
+    def set_control_fn(dx, control):
+        return dx.replace(ctrl=control)
+
+    fd_cache =  build_fd_cache(dx_template)
+    step_function = make_step_fn_fd_cache(mjx_model,set_control_fn, fd_cache)
+
+else:
+    step_function = make_step_fn_default(mjx_model)
 
 # Helper: Build the full 5D velocity from the free 2D parameters.
 def build_full_velocity(free_velocity):
@@ -63,7 +73,8 @@ def get_spinner_tip_position(dx):
 def simulate_trajectory(dx, free_velocity):
     full_velocity = build_full_velocity(free_velocity)
     dx = dx.replace(qvel=full_velocity)
-    states, dx = simulate_data_lax(mjx_data=dx, num_steps=300, step_fn=step_function)
+    states, dx = simulate_data_lax(mjx_data=dx, num_steps=300, step_fn=step_function) #JIT
+    #states, dx = simulate_data(mjx_data=dx, num_steps=300, step_function=step_function)
     final_position = get_spinner_tip_position(dx)
     distance = jnp.linalg.norm(final_position - TARGET_POS)
     return states, distance
@@ -75,7 +86,7 @@ def make_loss(dx):
         return total_cost
     return loss
 
-def solve(free_velocity, learning_rate=10, tol=1e-6, max_iter=20):
+def solve(free_velocity, learning_rate=5, tol=1e-4, max_iter=10):
     loss = make_loss(mjx_data)
     grad_loss = jax.jit(jax.jacrev(loss))
     loss_history = []  # Record the loss for each iteration.
@@ -91,43 +102,6 @@ def solve(free_velocity, learning_rate=10, tol=1e-6, max_iter=20):
             return free_velocity
 
     return free_velocity, loss_history
-
-def solve_with_optax(init_velocity, max_steps=20):
-    # 1) Learning-rate schedule:
-    # Starts at 10, decays by 0.9 every 5 steps (tweak as needed).
-    lr_schedule = optax.exponential_decay(
-        init_value=10.0,
-        transition_steps=5,
-        decay_rate=0.9,
-        end_value=1e-3  # won't decay below this
-    )
-    # 2) Define an optimizer
-    optimizer = optax.sgd(learning_rate=lr_schedule)
-    # 3) Initialize optimizer state
-    opt_state = optimizer.init(init_velocity)
-
-    # We'll store the cost each iteration
-    loss_history = []
-
-    # 4) Per-iteration update function (JIT-ed)
-    @jax.jit
-    def train_step(params, opt_state):
-        # compute grads
-        grads = jax.grad(cost_fn)(params)
-        # produce updates
-        updates, opt_state = optimizer.update(grads, opt_state)
-        # apply updates
-        new_params = optax.apply_updates(params, updates)
-        return new_params, opt_state
-
-    velocity = init_velocity
-    for i in range(max_steps):
-        velocity, opt_state = train_step(velocity, opt_state)
-        current_loss = cost_fn(velocity)
-        loss_history.append(current_loss)
-        print(f"Iteration {i}, cost={current_loss}, velocity={velocity}")
-
-    return velocity, loss_history
 
 # Visualise the converged trajectory.
 def plot_loss(loss_history):
@@ -148,8 +122,8 @@ def main():
     #print(states[-1])
     optimal_velocity, loss_history = solve(INIT_VEL)
     states, _ = simulate_trajectory(mjx_data, optimal_velocity)
-    #visualise_trajectory(states, mj_data, mj_model)
-    plot_loss(loss_history)
+    visualise_trajectory(states, mj_data, mj_model)
+    #plot_loss(loss_history)
 
 if __name__ == "__main__":
 

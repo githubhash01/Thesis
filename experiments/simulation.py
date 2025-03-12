@@ -207,6 +207,7 @@ def make_step_fn_fd_cache(
         """
         dx_with_ctrl = set_control_fn(dx, u)
         dx_next = mjx.step(mx, dx_with_ctrl)
+        dx_next = mjx.forward(mx, dx)
         return dx_next
 
     def step_fn_fwd(dx, u):
@@ -345,7 +346,7 @@ def simulate_data_lax(mjx_data, num_steps, step_fn):
     def body_fn(carry, _):
         data = carry
         # Apply one simulation step with zero controls (replace with your controls if needed)
-        data = step_fn(data, jnp.zeros_like(data.ctrl))
+        data = step_fn(data, u=jnp.zeros_like(data.ctrl))
         # Extract (qpos, qvel) as a single vector
         state = jnp.concatenate([data.qpos, data.qvel])
         return data, state

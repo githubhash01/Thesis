@@ -3,8 +3,6 @@ import argparse
 import os
 import jax
 import jax.numpy as jnp
-jax.config.update("jax_enable_x64", True)
-jax.config.update('jax_default_matmul_precision', 'high')
 
 class GradientMode(str, Enum):
     AUTODIFF = "autodiff"
@@ -43,13 +41,12 @@ import matplotlib.pyplot as plt
 
 # ---------------------------------------- START OF CODE ---------------------------------------- #
 
-# Load the rebound.xml environment.
+# Load the two_bounce.xml environment.
 xml_path = os.path.join(BASE_DIR, "xmls", "rebound.xml")
 mj_model = mujoco.MjModel.from_xml_path(filename=xml_path)
 mj_data = mujoco.MjData(mj_model)
 mjx_model = mjx.put_model(mj_model)
-dx_template = mjx.make_data(mjx_model)
-mjx_data = jax.tree.map(upscale, dx_template)
+mjx_data = mjx.put_data(mj_model, mj_data)
 
 # Choose the appropriate step function.
 if args.gradient_mode == GradientMode.FD:
@@ -122,10 +119,6 @@ def plot_loss(loss_history):
 
 def main():
     #states, cost = simulate_trajectory(mjx_data, INIT_VEL_STAR)
-    #loss_fn = make_loss(mjx_data)
-    #free_init = jnp.array([2.5, -0.3])
-    #cost = loss_fn(free_init)
-
     #jax.debug.print("Cost: {}", cost)
     #jax.debug.print("Final Position: {}", states[-1][:7])
     #visualise_trajectory(states, mj_data, mj_model)
@@ -135,8 +128,8 @@ def main():
     # For visualization, convert free parameters to full velocity.
     optimal_velocity = build_full_velocity(optimal_free_velocity)
     states, _ = simulate_trajectory(mjx_data, optimal_free_velocity)
-    visualise_trajectory(states, mj_data, mj_model)
-    #plot_loss(loss_history)
+    #visualise_trajectory(states, mj_data, mj_model)
+    plot_loss(loss_history)
 
 
 if __name__ == "__main__":
