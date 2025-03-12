@@ -515,8 +515,8 @@ def _linesearch(m: Model, d: Data, ctx: _Context) -> _Context:
 
   # move to new solution if improved
   lo, hi = ls_ctx.lo, ls_ctx.hi
-  improved = (lo.cost < p0.cost) | (hi.cost < p0.cost)
-  alpha = jp.where(lo.cost < hi.cost, lo.alpha, hi.alpha)
+  improved = (lo.loss_function < p0.cost) | (hi.loss_function < p0.cost)
+  alpha = jp.where(lo.loss_function < hi.loss_function, lo.alpha, hi.alpha)
   qacc = ctx.qacc + improved * ctx.search * alpha
   ma = ctx.Ma + improved * mv * alpha
   jaref = ctx.Jaref + improved * jv * alpha

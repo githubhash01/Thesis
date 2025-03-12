@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="mjx_arm" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="/usr/local/Caskroom/miniconda/base/envs/mjx_arm/envs/thesis" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="mjx" project-jdk-type="Python SDK" />
 </project>

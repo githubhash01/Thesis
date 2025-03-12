@@ -515,8 +515,8 @@ def _linesearch(m: Model, d: Data, ctx: _Context) -> _Context:
 
   # move to new solution if improved
   lo, hi = ls_ctx.lo, ls_ctx.hi
-  improved = (lo.cost < p0.cost) | (hi.cost < p0.cost)
-  alpha = jp.where(lo.cost < hi.cost, lo.alpha, hi.alpha)
+  improved = (lo.loss_function < p0.cost) | (hi.loss_function < p0.cost)
+  alpha = jp.where(lo.loss_function < hi.loss_function, lo.alpha, hi.alpha)
   qacc = ctx.qacc + improved * ctx.search * alpha
   ma = ctx.Ma + improved * mv * alpha
   jaref = ctx.Jaref + improved * jv * alpha
@@ -704,8 +704,20 @@ def implicit_lax_solve(m: Model, d: Data) -> Data:
         """
         Solves the linearized system J * x = y for differentiation.
         """
-        J = jax.jacobian(g)(y)
-        return jp.linalg.solve(J, y)
+        #J = jax.jacobian(g)(y)
+        #return jp.linalg.solve(J, y)
+
+        """
+        Solves the linearized system J * x = y using LU decomposition.
+        """
+        J = jax.jacobian(g)(y)  # Compute the Jacobian
+        P, L, U = jax.scipy.linalg.lu(J)  # LU decomposition
+
+        # Forward and backward substitution
+        y_perm = P @ y  # Apply permutation to y
+        z = jax.scipy.linalg.solve_triangular(L, y_perm, lower=True)  # Solve Lz = P y
+        x = jax.scipy.linalg.solve_triangular(U, z, lower=False)  # Solve Ux = z
+        return x
 
     # Run JAX root solver
     # warmstart:
@@ -734,26 +746,30 @@ def implicit_lax_solve(m: Model, d: Data) -> Data:
 
     return d
 
+
+
+
+
 """
 Solve Function
 
 Retrieves which solver function to be used from the OS environment 
 """
 import os
-SOLVER = os.environ.get("MJX_SOLVER", "default")
+SOLVER = os.environ.get("MJX_SOLVER", "implicit_jaxopt")
 
 def solve(m: Model, d: Data) -> Data:
 
   if SOLVER == "default":
-    jax.debug.print("{}", SOLVER)
+    #jax.debug.print("{}", SOLVER)
     return original_solve(m, d)
 
   elif SOLVER == "implicit_jaxopt":
-    jax.debug.print("{}", SOLVER)
+    #jax.debug.print("{}", SOLVER)
     return implicit_jaxopt_solve(m, d)
 
   elif SOLVER == "implicit_lax":
-    jax.debug.print("{}", SOLVER)
+    #jax.debug.print("{}", SOLVER)
     return implicit_lax_solve(m, d)
 
   else:
