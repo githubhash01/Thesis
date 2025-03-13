@@ -10,6 +10,7 @@ import numpy as np
 from jax._src.util import unzip2
 import time
 from mujoco import viewer
+import equinox
 
 config.update('jax_default_matmul_precision', 'high')
 config.update("jax_enable_x64", True)
@@ -26,8 +27,10 @@ def upscale(x):
             return jnp.float64(x)
     return x
 
+
 def set_control(dx, u):
     return dx.replace(ctrl=dx.ctrl.at[:].set(u))
+
 
 """
 Hashim's Step Functions 
@@ -48,13 +51,14 @@ def make_step_fn_state(model, mjx_data):
     return step_fn
 
 # Default - Autodiff
-def make_step_fn(mjx_model):
+
+def make_step_fn(mjx_model, set_control_fn: Callable):
 
     @jax.jit
-    def step_fn(mjx_data: mjx.Data, u: jnp.ndarray):
-        dx = mjx_data.replace(ctrl=u)
-        dx = mjx.step(mjx_model, dx)
-        dx = mjx.forward(mjx_model, dx)
+    def step_fn(dx: mjx.Data, u: jnp.ndarray):
+        dx_actuated = set_control_fn(dx, u)
+        dx = mjx.step(mjx_model, dx_actuated)
+        #dx = mjx.forward(mjx_model, dx_actuated)
         return dx
 
     return step_fn
@@ -118,7 +122,7 @@ def simulate_with_jacobians(mjx_data, num_steps, step_function):
     states = [state]
     state_jacobians = []
 
-    jac_fn_rev = jax.jit(jax.jacrev(step_function))
+    jac_fn_rev = jax.jacrev(step_function)
 
     for _ in range(num_steps):
         J_s = jac_fn_rev(state)
@@ -129,18 +133,36 @@ def simulate_with_jacobians(mjx_data, num_steps, step_function):
     states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
     return states, state_jacobians
 
-# just simulate states using mjx_data and standard step_function
-def simulate_data(mjx_data, num_steps, step_function):
-    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-    states = [state]
 
-    for _ in range(num_steps):
-        # TODO - No Control
-        mjx_data = step_function(mjx_data, u=jnp.zeros(mjx_data.ctrl.shape))
-        state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-        states.append(state)
+@equinox.filter_jit
+def simulate_trajectory(mx, qpos_init, qvel_init, set_control_fn, U):
+    """
+    Simulate a trajectory given a control sequence U.
 
-    return states, mjx_data
+    Args:
+        mx: The MuJoCo model handle (static)
+        qpos_init: initial positions (array)
+        qvel_init: initial velocities (array)
+        set_control_fn: fn(dx, u) -> dx to apply controls
+        U: (N, nu) array of controls.
+
+    Returns:
+        states: (N, nq+nv) array of states
+        state_jacobians: (N, nq+nv, nq+nv) array of state transition Jacobians
+        control_jacobians: (N, nq+nv, nu) array of control Jacobians
+    """
+    def step_fn(dx, u):
+        dx = set_control_fn(dx, u)
+        dx = mjx.step(mx, dx)
+        state = jnp.concatenate([dx.qpos, dx.qvel])
+        return dx, state
+
+    dx0 = mjx.make_data(mx)
+    dx0 = dx0.replace(qpos=dx0.qpos.at[:].set(qpos_init))
+    dx0 = dx0.replace(qvel=dx0.qvel.at[:].set(qvel_init))
+    dx_final, states = jax.lax.scan(step_fn, dx0, U)
+    return states
+
 
 """
 Visualisation

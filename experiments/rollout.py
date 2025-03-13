@@ -35,8 +35,9 @@ from simulation import (
     make_step_fn_state,
     make_step_fn,
     simulate_with_jacobians,
-    simulate_data,
-    visualise_trajectory
+    simulate_trajectory,
+    visualise_trajectory,
+    set_control
 )
 
 
@@ -81,9 +82,8 @@ def build_environment(experiment):
         """
 
         qpos = jnp.array([-1.57079633, -1.57079633, 1.0, 0.0, 0.0, 0.0])
-        mjx_data = mjx_data.replace(qpos=qpos)
-        init_ctrl = jnp.array([1.5, 0])
-        mjx_data = mjx_data.replace(qpos=qpos, ctrl=init_ctrl)
+        qvel = jnp.array([1.5, 0.0, 0.0, 0.0, 0.0])
+        mjx_data = mjx_data.replace(qpos=qpos, qvel=qvel)
         return mj_model, mj_data, mjx_model, mjx_data
 
     else:
@@ -113,10 +113,12 @@ def run_experiment(experiment, visualise=False):
 
 def just_visualise(experiment):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
-
-    step_fn = make_step_fn(mjx_model)
-
-    states, mjx_data = simulate_data(mjx_data, num_steps=1000, step_function=step_fn)
+    states = simulate_trajectory(
+        mx=mjx_model,
+        qpos_init=mjx_data.qpos,
+        qvel_init=mjx_data.qvel,
+        set_control_fn=set_control,
+        U=jnp.zeros((1000, mjx_model.nu)))
 
     visualise_trajectory(states, mj_data, mj_model)
 
