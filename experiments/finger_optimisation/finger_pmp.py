@@ -43,12 +43,8 @@ def simulate_trajectory(mx, dx0, set_control_fn,  running_cost_fn, terminal_cost
     def step_fn(dx, u):
         # Set control input and perform a simulation step.
         dx = set_control_fn(dx, u)
-        #dx = mjx.forward(mx, dx)
         dx = mjx.step(mx, dx)
         c = running_cost_fn(dx)
-        #jax.debug.print("Spinner Pose {}", dx.qpos[3:])
-        #jax.debug.print("Goal Pose {}", jnp.array([1.0, 1.0, 1.0]))
-        #jax.debug.print("Cost {}", c)
         state = jnp.concatenate([dx.qpos, dx.qvel])
         return dx, (state, c)
 
@@ -98,8 +94,8 @@ if __name__ == "__main__":
     qvel_init = jnp.array([0.8, 0.0, 0.0, 0.0, 0.0])
     mjx_data = mjx_data.replace(qpos=qpos_init, qvel=qvel_init)
     Nsteps, nu = 300, 2
-    #U0 = jax.random.normal(jax.random.PRNGKey(0), (Nsteps, nu)) * 2
-    U0 = jnp.zeros((Nsteps, nu)) # set U0 to all zeros
+    U0 = jax.random.normal(jax.random.PRNGKey(0), (Nsteps, nu)) * 2
+    #U0 = jnp.zeros((Nsteps, nu)) # set U0 to all zeros
 
     def set_control(dx, u):
         dx = dx.replace(ctrl=dx.ctrl.at[:].set(u))
@@ -123,18 +119,13 @@ if __name__ == "__main__":
         pos_finger = dx.qpos[2]
         return 1 * pos_finger ** 2
 
-
-    loss_fn = make_loss(mx, mjx_data, set_control, spinner_cost, terminal_cost)
+    loss_fn = make_loss(mx, mjx_data, set_control, spinner_cost, spinner_cost)
     grad_loss_fn = equinox.filter_jit(jax.jacrev(loss_fn))
 
     optimizer = PMP(loss=loss_fn, grad_loss=grad_loss_fn)
-    optimal_U = optimizer.solve(U0, learning_rate=0.2, max_iter=150)
-    #optimal_U = U0
+    optimal_U = optimizer.solve(U0, learning_rate=0.2, max_iter=10)
+
     d = mujoco.MjData(model)
-    #def simulate_trajectory(mx, dx, running_cost_fn, terminal_cost_fn, U):
-    #spinner_position = mjx_data.site_xpos[spinner_site]
-    #print(spinner_position)
-    states, _, _ = simulate_trajectory(mx, mjx_data, set_control, spinner_cost, terminal_cost, U0)
+    states, _, dx_final = simulate_trajectory(mx, mjx_data, set_control, spinner_cost, terminal_cost, optimal_U)
+    print(spinner_cost(dx_final))
     visualise_trajectory(states, d, model)
-    #spinner_position = mjx_data.site_xpos[spinner_site]
-    #print(spinner_position)
