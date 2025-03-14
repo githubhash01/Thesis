@@ -9,7 +9,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def get_experiment_data(experiment_name, gradient_method):
     saved_data_dir = str(os.path.join(BASE_DIR, "stored_data", experiment_name))
-    jacobians_file = f"jacobians_{gradient_method}.npy"
+    jacobians_file = f"state_jacobians_{gradient_method}.npy"
     states_file = f"states_{gradient_method}.npy"
     states = np.load(os.path.join(saved_data_dir, states_file))
     jacobians = np.load(os.path.join(saved_data_dir, jacobians_file))
@@ -131,18 +131,27 @@ def main():
 
     xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
     model = mujoco.MjModel.from_xml_path(filename=xml_path)
-    states_fd, jacobians_fd = get_experiment_data(experiment, GradientMode.FD)
-    states_ad, jacobians_ad = get_experiment_data(experiment, GradientMode.AUTODIFF)
-    states_implicit_jaxopt, jacobians_implicit_jaxopt = get_experiment_data(experiment, GradientMode.IMPLICIT_JAXOPT)
-    states_implicit_lax, jacobians_implicit_lax = get_experiment_data(experiment, GradientMode.IMPLICIT_LAX)
+    #states_fd, jacobians_fd = get_experiment_data(experiment, GradientMode.FD)
+    #states_ad, jacobians_ad = get_experiment_data(experiment, GradientMode.AUTODIFF)
+    #states_implicit_jaxopt, jacobians_implicit_jaxopt = get_experiment_data(experiment, GradientMode.IMPLICIT_JAXOPT)
+    #states_implicit_lax, jacobians_implicit_lax = get_experiment_data(experiment, GradientMode.IMPLICIT_LAX)
 
     # print a random jacobian
     #print_state_jacobian(jacobians_ad[600], model)
 
     # compare the jacobians
-    error_stats = compare_jacobians(jacobians_ad, jacobians_implicit_jaxopt)
-    print(error_stats)
+    #error_stats = compare_jacobians(jacobians_ad, jacobians_implicit_jaxopt)
+    #print(error_stats)
 
+    states_autodiff, jacobians_autodiff = get_experiment_data(experiment, GradientMode.AUTODIFF)
+    states_fd, jacobians_fd = get_experiment_data(experiment, GradientMode.FD)
+    states_implicit_jaxopt, jacobians_implicit_jaxopt = get_experiment_data(experiment, GradientMode.IMPLICIT_JAXOPT)
+    states_implicit_lax, jacobians_implicit_lax = get_experiment_data(experiment, GradientMode.IMPLICIT_LAX)
+
+    #print_state_jacobian(jacobians_fd[800], model)
+    # compare the jacobians
+    error_stats = compare_jacobians(jacobians_implicit_jaxopt, jacobians_autodiff)
+    print(error_stats)
 
 
 if __name__ == "__main__":

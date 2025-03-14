@@ -515,8 +515,8 @@ def _linesearch(m: Model, d: Data, ctx: _Context) -> _Context:
 
   # move to new solution if improved
   lo, hi = ls_ctx.lo, ls_ctx.hi
-  improved = (lo.loss_function < p0.cost) | (hi.loss_function < p0.cost)
-  alpha = jp.where(lo.loss_function < hi.loss_function, lo.alpha, hi.alpha)
+  improved = (lo.cost < p0.cost) | (hi.cost < p0.cost)
+  alpha = jp.where(lo.cost < hi.cost, lo.alpha, hi.alpha)
   qacc = ctx.qacc + improved * ctx.search * alpha
   ma = ctx.Ma + improved * mv * alpha
   jaref = ctx.Jaref + improved * jv * alpha
@@ -586,6 +586,7 @@ def original_solve(m: Model, d: Data) -> Data:
 Implicit Differentiation using jaxopt.implicit_diff 
 """
 from jaxopt import implicit_diff
+from jaxopt import linear_solve
 
 # jaxopt IFT solve #
 def implicit_jaxopt_solve(m: Model, d: Data) -> Data:
@@ -642,12 +643,14 @@ def implicit_jaxopt_solve(m: Model, d: Data) -> Data:
     d = d.replace(qacc_warmstart=qacc, qacc=qacc, qfrc_constraint=qfrc_constraint, efc_force=efc_force)
     return d
 
-"""
-Implicit Differentiation using jax.lax.custom_root
-"""
+
+from jax.flatten_util import ravel_pytree
+from jax.scipy.sparse.linalg import cg
+
 def implicit_lax_solve(m: Model, d: Data) -> Data:
     """
-    Solves for qacc using the implicit function theorem-based solver in JAX.
+    Solves for qacc using the implicit function theorem-based solver in JAX,
+    using jax.lax.custom_root on a flattened version of the root function.
 
     Parameters:
         m (Model): MuJoCo model instance.
@@ -657,86 +660,92 @@ def implicit_lax_solve(m: Model, d: Data) -> Data:
         Data: Updated MuJoCo data with solved values.
     """
 
-    # Define the root function (objective function)
-    def objective_function(qacc: jax.Array) -> jax.Array:
-        """
-        Computes the gradient of the cost function for the dynamics equation.
-
-        M qacc + c - tau + J.T S(J.Tqacc - a_ref) = 0
-        """
-        ctx = _Context.create(m, d, grad=False).replace(qacc=qacc)
+    # The objective function: given qacc (in pytree form) it returns a (structured)
+    # residual that should be zero at the solution.
+    def objective_function(qacc: jax.Array):
+        ctx = _Context.create(m, d, grad=True).replace(qacc=qacc)
         ctx = _update_constraint(m, d, ctx)
         ctx = _update_gradient(m, d, ctx)
+        return ctx.grad
 
-        #jax.debug.print("Gradient, Position {} {}", ctx.grad, (d.qpos[0] - d.qpos[1]) ** 2)
-        #jax.debug.print("Position {}", d.qpos)
-        return ctx.grad  # Return gradient as root function
-
-    # Iterative solver for root finding
-    def solve_iterative(f, qacc_guess: jax.Array):
-        """
-        Iteratively solves for qacc using Newton's method with line search.
-        """
-
-        def cond(ctx: _Context) -> jax.Array:
+    # The iterative solver working in pytree space.
+    def solve_iterative(f, qacc_guess):
+        def cond(ctx: _Context):
             improvement = _rescale(m, ctx.prev_cost - ctx.cost)
             gradient = _rescale(m, jp.linalg.norm(ctx.grad))
             return ~(ctx.solver_niter >= m.opt.iterations
                      | (improvement < m.opt.tolerance)
                      | (gradient < m.opt.tolerance))
 
-        def body(ctx: _Context) -> _Context:
+        def body(ctx: _Context):
             ctx = _linesearch(m, d, ctx)
             ctx = _update_constraint(m, d, ctx)
             ctx = _update_gradient(m, d, ctx)
             search = -ctx.Mgrad if m.opt.solver == SolverType.NEWTON else None
             return ctx.replace(search=search, solver_niter=ctx.solver_niter + 1)
 
-        # Initialize the context and solve iteratively
         ctx_iter = _Context.create(m, d).replace(qacc=qacc_guess)
-        ctx_iter = jax.lax.while_loop(cond, body, ctx_iter) if m.opt.iterations > 1 else body(ctx_iter)
-
-        # Return qacc_star + auxiliary outputs
+        if m.opt.iterations > 1:
+            ctx_iter = jax.lax.while_loop(cond, body, ctx_iter)
+        else:
+            ctx_iter = body(ctx_iter)
         return ctx_iter.qacc, (ctx_iter.qfrc_constraint, ctx_iter.efc_force)
 
-    # Tangent solver for implicit differentiation
-    def tangent_solver(g, y):
-        """
-        Solves the linearized system J * x = y for differentiation.
-        """
-        #J = jax.jacobian(g)(y)
-        #return jp.linalg.solve(J, y)
+    # --- Flatten the problem ---
+    # Assume that d.qacc_smooth (or the warmstart candidate) is our initial guess.
+    qacc_guess = d.qacc_smooth
+    flat_qacc_guess, unravel_fn = ravel_pytree(qacc_guess)
 
-        """
-        Solves the linearized system J * x = y using LU decomposition.
-        """
-        J = jax.jacobian(g)(y)  # Compute the Jacobian
-        P, L, U = jax.scipy.linalg.lu(J)  # LU decomposition
+    # Define a flat version of the objective.
+    def f_flat(qacc_flat: jax.Array) -> jax.Array:
+        # Unflatten the candidate qacc
+        qacc = unravel_fn(qacc_flat)
+        # Compute the residual (a pytree) and flatten it.
+        res = objective_function(qacc)
+        flat_res, _ = ravel_pytree(res)
+        return flat_res
 
-        # Forward and backward substitution
-        y_perm = P @ y  # Apply permutation to y
-        z = jax.scipy.linalg.solve_triangular(L, y_perm, lower=True)  # Solve Lz = P y
-        x = jax.scipy.linalg.solve_triangular(U, z, lower=False)  # Solve Ux = z
+    # Define a flat solver: take a flat initial guess, unflatten it,
+    # run the iterative solver in pytree space, and flatten the result.
+    def solve_iterative_flat(f, qacc_guess_flat: jax.Array):
+        qacc_guess = unravel_fn(qacc_guess_flat)
+        qacc_star, aux = solve_iterative(f, qacc_guess)
+        qacc_star_flat, _ = ravel_pytree(qacc_star)
+        return qacc_star_flat, aux
+
+    # Tangent solve: defined on the flattened objective.
+    def tangent_solve_flat(g, y):
+        # Compute the full Jacobian of g at y.
+        J = jax.jacobian(g)(y)
+        # Form a regularized normal equations system.
+        reg = 1e-6
+        A = J.T @ J + reg * jp.eye(J.shape[1])
+        b = J.T @ y
+        # Solve for x in the least squares sense.
+        x = jp.linalg.solve(A, b)
         return x
 
-    # Run JAX root solver
-    # warmstart:
-    qacc_guess = d.qacc_smooth
-    if not m.opt.disableflags & DisableBit.WARMSTART:
-        warm = _Context.create(m, d.replace(qacc=d.qacc_warmstart), grad=False)
-        smth = _Context.create(m, d.replace(qacc=d.qacc_smooth), grad=False)
+    # Optionally use a warmstart if enabled.
+    if not (m.opt.disableflags & DisableBit.WARMSTART):
+        warm = _Context.create(m, d.replace(qacc=d.qacc_warmstart), grad=True)
+        smth = _Context.create(m, d.replace(qacc=d.qacc_smooth), grad=True)
         qacc_guess = jp.where(warm.cost < smth.cost, d.qacc_warmstart, d.qacc_smooth)
+        flat_qacc_guess, unravel_fn = ravel_pytree(qacc_guess)
     d = d.replace(qacc=qacc_guess)
 
-    qacc_star, (qfrc_constraint, efc_force) = jax.lax.custom_root(
-        f=objective_function,
-        initial_guess=qacc_guess,
-        solve=solve_iterative,
-        tangent_solve=tangent_solver,
+    # Run the flat custom_root solver.
+    qacc_star_flat, (qfrc_constraint, efc_force) = jax.lax.custom_root(
+        f=f_flat,
+        initial_guess=flat_qacc_guess,
+        solve=solve_iterative_flat,
+        tangent_solve=tangent_solve_flat,
         has_aux=True
     )
 
-    # Update the MuJoCo data object with the solved values
+    # Unflatten the solution.
+    qacc_star = unravel_fn(qacc_star_flat)
+
+    # Update the MuJoCo data object with the solved values.
     d = d.replace(
         qacc_warmstart=qacc_star,
         qacc=qacc_star,
@@ -745,10 +754,6 @@ def implicit_lax_solve(m: Model, d: Data) -> Data:
     )
 
     return d
-
-
-
-
 
 """
 Solve Function
@@ -760,7 +765,7 @@ SOLVER = os.environ.get("MJX_SOLVER", "implicit_jaxopt")
 
 def solve(m: Model, d: Data) -> Data:
 
-  if SOLVER == "default":
+  if SOLVER == "autodiff" or SOLVER == "fd":
     #jax.debug.print("{}", SOLVER)
     return original_solve(m, d)
 

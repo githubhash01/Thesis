@@ -2,7 +2,13 @@ from enum import Enum
 import argparse
 import os
 from jax import numpy as jnp
+from jax import config
 import jax
+import pandas as pd
+import numpy as np
+
+config.update('jax_default_matmul_precision', 'high')
+config.update("jax_enable_x64", True)
 
 class ExperimentType(str, Enum):
     ONE_BOUNCE = "one_bounce"
@@ -26,27 +32,36 @@ parser.add_argument("--gradient_mode", type=str, default="autodiff", help="solve
 args = parser.parse_args()
 # set the MuJoCo solver depending on the gradient mode
 os.environ["MJX_SOLVER"] = args.gradient_mode
+from simulation import (
+    simulate_trajectory,
+    visualise_trajectory,
+    set_control,
+    upscale,
+    build_fd_cache,
+    make_step_fn_fd_cache,
+    make_step_fn
+)
+
 """
 Now we can import mujoco modules, having set the solver
 """
 import mujoco
 from mujoco import mjx
-from simulation import (
-    make_step_fn_state,
-    make_step_fn,
-    simulate_with_jacobians,
-    simulate_trajectory,
-    visualise_trajectory,
-    set_control
-)
 
 
 def build_environment(experiment):
     xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
     mj_model = mujoco.MjModel.from_xml_path(filename=xml_path)
+
+    if args.gradient_mode == GradientMode.AUTODIFF:
+        mj_model.opt.iterations = 1    # autodiff limits the number of iterations to 1 so as not run out of memory
+    else:
+        mj_model.opt.iterations = 100
+
     mj_data = mujoco.MjData(mj_model)
     mjx_model = mjx.put_model(mj_model)
-    mjx_data = mjx.put_data(mj_model, mj_data)
+    dx_template = mjx.make_data(mj_model)
+    mjx_data = jax.tree.map(upscale, dx_template)
 
     if experiment == ExperimentType.ONE_BOUNCE:
         """
@@ -80,7 +95,6 @@ def build_environment(experiment):
         finger starts on top of the spinner with the distal joint recoiled
         distal joint has a velocity placed on it so that it flicks the spinner
         """
-
         qpos = jnp.array([-1.57079633, -1.57079633, 1.0, 0.0, 0.0, 0.0])
         qvel = jnp.array([1.5, 0.0, 0.0, 0.0, 0.0])
         mjx_data = mjx_data.replace(qpos=qpos, qvel=qvel)
@@ -89,52 +103,56 @@ def build_environment(experiment):
     else:
         raise ValueError(f"Unknown experiment: {experiment}")
 
-def run_experiment(experiment, visualise=False):
+def run_experiment(experiment, visualise=False, save_data=False):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
 
-    # TODO - DANIEL'S FD IMPLEMENTATION
-    step_function = make_step_fn_state(mjx_model, mjx_data)
+    if args.gradient_mode == GradientMode.FD:
+        fd_cache = build_fd_cache(mjx_data)
+        step_function = make_step_fn_fd_cache(mjx_model, fd_cache)
+    else:
+        step_function = make_step_fn(mjx_model)
 
-    states, jacobians = simulate_with_jacobians(
-        mjx_data=mjx_data,
-        num_steps=1000,
-        step_function=step_function
-    )
+    # TODO - allow for control inputs to be passed in
+    states, state_jacobians, control_jacobians = simulate_trajectory(
+        mx=mjx_model,
+        qpos_init=mjx_data.qpos,
+        qvel_init=mjx_data.qvel,
+        step_fn=step_function,
+        U=jnp.asarray(jnp.zeros((1000, mjx_model.nu)), dtype=jnp.float64))
+
+    if save_data:
+        saved_data_dir = os.path.join(BASE_DIR, "stored_data", experiment)
+        os.makedirs(saved_data_dir, exist_ok=True)  # Ensure the directory exists
+        np.save(os.path.join(saved_data_dir, f"states_{args.gradient_mode}.npy"), states)
+        np.save(os.path.join(saved_data_dir, f"state_jacobians_{args.gradient_mode}.npy"), state_jacobians)
+
     # visualise the trajectory
     if visualise:
         visualise_trajectory(states, mj_data, mj_model)
 
-    """
-    saved_data_dir = os.path.join(BASE_DIR, "stored_data", experiment)
-    os.makedirs(saved_data_dir, exist_ok=True)  # Ensure the directory exists
-    np.save(os.path.join(saved_data_dir, f"states_{args.gradient_mode}.npy"), states)
-    np.save(os.path.join(saved_data_dir, f"jacobians_{args.gradient_mode}.npy"), jacobians)
-    """
-
 def just_visualise(experiment):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
-    states = simulate_trajectory(
+    states, state_jacobians, _ = simulate_trajectory(
         mx=mjx_model,
         qpos_init=mjx_data.qpos,
         qvel_init=mjx_data.qvel,
         set_control_fn=set_control,
-        U=jnp.zeros((1000, mjx_model.nu)))
+        U=jnp.asarray(jnp.zeros((1000, mjx_model.nu)), dtype=jnp.float64))
 
     visualise_trajectory(states, mj_data, mj_model)
 
+
 def main():
 
+    #Run all experiments:
     """
-    Run all experiments:
-
     for experiment in ExperimentType:
         print(f"Running: {experiment} using: {args.gradient_mode}\n")
-        run_experiment(experiment, visualise=False)
-
+        run_experiment(experiment, visualise=False, save_data=True)
     """
-    #run_experiment(ExperimentType.FINGER, visualise=True)
-    just_visualise(ExperimentType.FINGER)
-
+    # Run a single experiment
+    experiment = ExperimentType.FINGER
+    run_experiment(experiment, visualise=False, save_data=True)
 
 if __name__ == "__main__":
     main()

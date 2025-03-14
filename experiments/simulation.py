@@ -20,156 +20,98 @@ config.update("jax_enable_x64", True)
 Helper Functions
 """
 def upscale(x):
-    if 'dtype' in dir(x):
-        if x.dtype == jnp.int32:
-            return jnp.int64(x)
+    if hasattr(x, "dtype"):
+        # If x is a JAX array and has an integer type, cast it to float64.
+        if jnp.issubdtype(x.dtype, jnp.integer):
+            return x.astype(jnp.float64)
+        # If x is float32, cast it to float64.
         elif x.dtype == jnp.float32:
-            return jnp.float64(x)
-    return x
-
+            return x.astype(jnp.float64)
+        else:
+            return x
+    elif isinstance(x, int):
+        # Convert Python ints to a JAX array of type float64.
+        return jnp.array(x, dtype=jnp.float64)
 
 def set_control(dx, u):
     return dx.replace(ctrl=dx.ctrl.at[:].set(u))
 
-
 """
-Hashim's Step Functions 
+Standard step function
 """
 
-# Step Function for state (Jacobian) computation
-def make_step_fn_state(model, mjx_data):
+def make_step_fn(mx, set_control_fn=set_control):
 
-    @jax.jit
-    def step_fn(state):
-        nq = model.nq
-        qpos, qvel = state[:nq], state[nq:]
-        dx = mjx_data.replace(qpos=qpos, qvel=qvel)
-        dx_next = mjx.step(model, dx)
-        next_state = jnp.concatenate([dx_next.qpos, dx_next.qvel])
-        return next_state
-
-    return step_fn
-
-# Default - Autodiff
-
-def make_step_fn(mjx_model, set_control_fn: Callable):
-
-    @jax.jit
     def step_fn(dx: mjx.Data, u: jnp.ndarray):
-        dx_actuated = set_control_fn(dx, u)
-        dx = mjx.step(mjx_model, dx_actuated)
-        #dx = mjx.forward(mjx_model, dx_actuated)
-        return dx
+        """
+        Forward pass:
+          1) Writes 'u' into dx_init (or a copy thereof) via set_control_fn.
+          2) Steps the simulation forward one step with MuJoCo.
+        """
+        dx_with_ctrl = set_control_fn(dx, u)
+        dx_next = mjx.step(mx, dx_with_ctrl)
+        return dx_next
 
     return step_fn
-
-
-# --- Finite Differences ---
-def make_step_fn_fd(mjx_model, mjx_data):
-    epsilon = 1e-6
-
-    # This function performs the actual step computation.
-    @jax.jit
-    def _step_fn(state):
-        nq = mjx_model.nq
-        qpos, qvel = state[:nq], state[nq:]
-        dx = mjx_data.replace(qpos=qpos, qvel=qvel)
-        dx_next = mjx.step(mjx_model, dx)
-        next_state = jnp.concatenate([dx_next.qpos, dx_next.qvel])
-        return next_state
-
-    # Define the custom_vjp-decorated function.
-    @jax.custom_vjp
-    def step_fn(state):
-        return _step_fn(state)
-
-    # Forward pass: compute the output and return the input (or any auxiliary data)
-    def step_fn_fwd(s):
-        f_s = _step_fn(s)
-        return f_s, s  # saving s for use in backward pass
-
-    # Backward pass: given the saved s and the incoming cotangent,
-    # compute the vector-Jacobian product using finite differences.
-    def step_fn_bwd(s, cotangent):
-        #jax.debug.print("Using finite differences for VJP")
-        f_s = _step_fn(s)  # compute baseline output once
-        grad = []
-        for j in range(s.shape[0]):
-            # Create a perturbation along the j-th coordinate.
-            e_j = jnp.zeros_like(s).at[j].set(1.0)
-            # Evaluate the function at the perturbed state.
-            f_perturbed = _step_fn(s + epsilon * e_j)
-            # Approximate the partial derivative for coordinate j.
-            diff = (f_perturbed - f_s) / epsilon
-            # Multiply by the cotangent to get the j-th component of the VJP.
-            grad_j = jnp.vdot(cotangent, diff)
-            grad.append(grad_j)
-        grad = jnp.stack(grad)
-        return (grad,)
-
-    # Register the forward and backward functions with the custom_vjp mechanism.
-    step_fn.defvjp(step_fn_fwd, step_fn_bwd)
-    return step_fn
-
 
 """
 Simulation Loop 
 """
 
-# simulate states and retrieve state transition jacobians
-def simulate_with_jacobians(mjx_data, num_steps, step_function):
-    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
-    states = [state]
-    state_jacobians = []
-
-    jac_fn_rev = jax.jacrev(step_function)
-
-    for _ in range(num_steps):
-        J_s = jac_fn_rev(state)
-        state_jacobians.append(J_s)
-        state = step_function(state)
-        states.append(jnp.array(state))
-
-    states, state_jacobians = jnp.array(states), jnp.array(state_jacobians)
-    return states, state_jacobians
-
-
 @equinox.filter_jit
-def simulate_trajectory(mx, qpos_init, qvel_init, set_control_fn, U):
+def simulate_trajectory(mx, qpos_init, qvel_init, step_fn, U):
     """
     Simulate a trajectory given a control sequence U.
 
     Args:
-        mx: The MuJoCo model handle (static)
-        qpos_init: initial positions (array)
-        qvel_init: initial velocities (array)
-        set_control_fn: fn(dx, u) -> dx to apply controls
+        mx: The MuJoCo model handle (static).
+        qpos_init: initial positions (array).
+        qvel_init: initial velocities (array).
+        step_fn: function (dx, u) -> dx_next to step the simulation (e.g. with FD or without)
         U: (N, nu) array of controls.
 
     Returns:
-        states: (N, nq+nv) array of states
-        state_jacobians: (N, nq+nv, nq+nv) array of state transition Jacobians
-        control_jacobians: (N, nq+nv, nu) array of control Jacobians
+        states: (N, nq+nv) array of states.
+        state_jacobians: (N, nq+nv, nq+nv) array of state transition Jacobians.
+        control_jacobians: (N, nq+nv, nu) array of control Jacobians.
     """
-    def step_fn(dx, u):
-        dx = set_control_fn(dx, u)
-        dx = mjx.step(mx, dx)
-        state = jnp.concatenate([dx.qpos, dx.qvel])
-        return dx, state
+    def step_state(dx, u):
+        dx_next = step_fn(dx, u)
+        # Reapply upscale so that every field is float.
+        dx_next = jax.tree_map(upscale, dx_next)
+        state = jnp.concatenate([dx_next.qpos, dx_next.qvel]).astype(jnp.float64)
+        return dx_next, state
 
-    dx0 = mjx.make_data(mx)
+    # Helper function that returns just the differentiable output.
+    def f(dx, u):
+        return step_state(dx, u)[1]
+
+    # Compute the Jacobians of f with respect to dx and u.
+    J_f = jax.jacrev(f, argnums=(0, 1), allow_int=True)
+
+    def step_fn_jac(dx, u):
+        dx, state = step_state(dx, u)
+        jac_state, jac_control = J_f(dx, u)
+        # Here, jac_state is a Data-like structure with the same fields as dx.
+        # Extract the derivatives with respect to qpos and qvel and flatten them.
+        flat_jac_state = jnp.concatenate([jac_state.qpos, jac_state.qvel], axis=-1)
+        return dx, (state, flat_jac_state, jac_control)
+
+    # Build the initial data structure and upscale all its fields.
+    dx0 = jax.tree_map(upscale, mjx.make_data(mx))
     dx0 = dx0.replace(qpos=dx0.qpos.at[:].set(qpos_init))
     dx0 = dx0.replace(qvel=dx0.qvel.at[:].set(qvel_init))
-    dx_final, states = jax.lax.scan(step_fn, dx0, U)
-    return states
+
+    dx_final, (states, state_jacobians, control_jacobians) = jax.lax.scan(step_fn_jac, dx0, U)
+    return states, state_jacobians, control_jacobians
 
 
 """
 Visualisation
 """
 
-def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01):
-
+def visualise_trajectory(states, d: mujoco.MjData, m, sleep=0.01):
+    print("visualise_trajectory: mj_model =", m)
     states_np = [np.array(s) for s in states]
 
     with viewer.launch_passive(m, d) as v:
@@ -190,8 +132,6 @@ def visualise_trajectory(states, d: mujoco.MjData, m: mujoco.MjModel, sleep=0.01
             time_until_next = m.opt.timestep - (time.time() - step_start)
             if time_until_next > 0:
                 time.sleep(time_until_next)
-
-
 
 
 """
@@ -273,8 +213,8 @@ def build_fd_cache(
 # -------------------------------------------------------------
 def make_step_fn_fd_cache(
         mx,
-        set_control_fn: Callable,
-        fd_cache: FDCache
+        fd_cache: FDCache,
+        set_control_fn: Callable = set_control,
 ):
     """
     Create a custom_vjp step function that takes (dx, u) and returns dx_next.
@@ -289,6 +229,7 @@ def make_step_fn_fd_cache(
           1) Writes 'u' into dx_init (or a copy thereof) via set_control_fn.
           2) Steps the simulation forward one step with MuJoCo.
         """
+        jax.debug.print("Using finite differences in the backward pass.")
         dx_with_ctrl = set_control_fn(dx, u)
         dx_next = mjx.step(mx, dx_with_ctrl)
         return dx_next
