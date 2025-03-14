@@ -28,7 +28,7 @@
 
     <!-- Ball starts at (-2, 0, 0.5) -->
     <body name="ball" pos="-2 0 0.5">
-      <joint type="free"/>
+      <joint name="ball_joint" type="free"/>
       <geom type="sphere" size="0.1" mass="0.1" rgba="1 0 0 1"/>
     </body>
 
@@ -46,4 +46,10 @@
     </body>
 
   </worldbody>
+
+  <!-- Totally redundant control - just so the rest of the code does not break-->
+  <actuator>
+    <motor name="dummy_cntrl" joint="ball_joint" gear="0"/>
+  </actuator>
+
 </mujoco>

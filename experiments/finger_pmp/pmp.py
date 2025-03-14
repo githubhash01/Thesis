@@ -39,16 +39,12 @@ def simulate_trajectory(mx, qpos_init, set_control_fn, running_cost_fn, terminal
         dx = set_control_fn(dx, u)
         dx = mjx.step(mx, dx)
         c = running_cost_fn(dx)
-        #jax.debug.print("Cost: {}", c)
         state = jnp.concatenate([dx.qpos, dx.qvel])
         return dx, (state, c)
 
     dx0 = mjx.make_data(mx)
     dx0 = dx0.replace(qpos=dx0.qpos.at[:].set(qpos_init))
-    dx0 = dx0.replace(qvel=dx0.qvel.at[0].set(1))
     dx_final, (states, costs) = jax.lax.scan(step_fn, dx0, U)
-    #jax.debug.print("Final Spinner Position: {}", jnp.round(dx_final.qpos[3:], 1))
-    jax.debug.print("Final Cost: {}", running_cost_fn(dx_final))
     total_cost = jnp.sum(costs) + terminal_cost_fn(dx_final)
     return states, total_cost
 
@@ -85,8 +81,8 @@ class PMP:
             U_new = U - learning_rate * g
             f_val = self.loss(U_new)
             print(f"Iteration {i}: cost={f_val}")
-            #if jnp.linalg.norm(U_new - U) < tol or jnp.isnan(g).any():
-            #    return U_new
+            if jnp.linalg.norm(U_new - U) < tol or jnp.isnan(g).any():
+                return U_new
             U = U_new
         return U
 

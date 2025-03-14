@@ -76,7 +76,7 @@ This script loads stored data and processes the results to extract insights from
 ## Running Trajectory Optimisation
 To run the trajectory optimisation experiment, use:
 ```sh
-mjpython experiments/trajectory_optimisation.py
+mjpython experiments/rebound_optimisation.py
 ```
 This will optimize the trajectory of a ball rebounding from a wall using gradient mode of your choice.
 

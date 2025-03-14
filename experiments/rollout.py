@@ -113,7 +113,7 @@ def run_experiment(experiment, visualise=False, save_data=False):
         step_function = make_step_fn(mjx_model)
 
     # TODO - allow for control inputs to be passed in
-    states, state_jacobians, control_jacobians = simulate_trajectory(
+    states, state_jacobians, control_jacobians, _= simulate_trajectory(
         mx=mjx_model,
         qpos_init=mjx_data.qpos,
         qvel_init=mjx_data.qvel,
@@ -132,7 +132,7 @@ def run_experiment(experiment, visualise=False, save_data=False):
 
 def just_visualise(experiment):
     mj_model, mj_data, mjx_model, mjx_data = build_environment(experiment)
-    states, state_jacobians, _ = simulate_trajectory(
+    states, state_jacobians, _, _ = simulate_trajectory(
         mx=mjx_model,
         qpos_init=mjx_data.qpos,
         qvel_init=mjx_data.qvel,

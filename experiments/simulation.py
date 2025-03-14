@@ -58,6 +58,19 @@ def make_step_fn(mx, set_control_fn=set_control):
 Simulation Loop 
 """
 
+# just simulate states using mjx_data and standard step_function
+def simulate_data(mjx_data, num_steps, step_function):
+    state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+    states = [state]
+
+    for _ in range(num_steps):
+        # TODO - No Control
+        mjx_data = step_function(mjx_data, u=jnp.zeros(mjx_data.ctrl.shape))
+        state = jnp.concatenate([mjx_data.qpos, mjx_data.qvel])
+        states.append(state)
+
+    return states, mjx_data
+
 @equinox.filter_jit
 def simulate_trajectory(mx, qpos_init, qvel_init, step_fn, U):
     """
@@ -103,7 +116,7 @@ def simulate_trajectory(mx, qpos_init, qvel_init, step_fn, U):
     dx0 = dx0.replace(qvel=dx0.qvel.at[:].set(qvel_init))
 
     dx_final, (states, state_jacobians, control_jacobians) = jax.lax.scan(step_fn_jac, dx0, U)
-    return states, state_jacobians, control_jacobians
+    return states, state_jacobians, control_jacobians, dx_final
 
 
 """
@@ -229,7 +242,7 @@ def make_step_fn_fd_cache(
           1) Writes 'u' into dx_init (or a copy thereof) via set_control_fn.
           2) Steps the simulation forward one step with MuJoCo.
         """
-        jax.debug.print("Using finite differences in the backward pass.")
+        #jax.debug.print("Using finite differences in the backward pass.")
         dx_with_ctrl = set_control_fn(dx, u)
         dx_next = mjx.step(mx, dx_with_ctrl)
         return dx_next
