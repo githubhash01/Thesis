@@ -42,9 +42,9 @@
         <geom solimp="0 0.99 0.1" solref="0.02 1"/>
         <joint type="hinge" axis="0 -1 0"/>
         <motor ctrllimited="true" ctrlrange="-1 1"/>
-        <!-- <default class="finger">
+         <default class="finger">
             <site type="ellipsoid" size=".025 .03 .025" rgba=".5 .5 .5 .3" group="3"/>
-        </default> -->
+        </default>
     </default>
  
     <worldbody>
@@ -53,11 +53,11 @@
         <camera name="cam0" pos="0 -1 .8" xyaxes="1 0 0 0 1 2"/>
         <camera name="cam1" pos="0 -1 .4" xyaxes="1 0 0 0 0 1" />
 
-        <body name="proximal" pos="-.2 0 -0.01" >
+        <body name="proximal" pos="-.2 0 -0.01" childclass="finger">
             <geom name="proximal_decoration" type="cylinder" fromto="0 -.033 0 0 .033 0" size=".034" material="decoration" />
             <joint name="proximal" range="-150 -80" ref="-90" damping="0.05" limited="false" />
             <geom name="proximal" type="capsule" material="self" size=".03" fromto="0 0 0 0 0 -.17"/>
-            <body name="distal" pos="0 0 -.18" >
+            <body name="distal" pos="0 0 -.18" childclass="finger">
                 <joint name="distal" range="-50 50" damping="0.05" limited="false"/>
                 <geom name="distal" type="capsule" size=".028" material="self" fromto="0 0 0 0 0 -.16"/>
                 <geom name="fingertip" type="capsule" size=".03" material="effector" fromto="0 0 -.13 0 0 -.161"/>

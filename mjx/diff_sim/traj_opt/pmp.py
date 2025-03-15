@@ -80,7 +80,11 @@ class PMP:
             g = self.grad_loss(U)
             U_new = U - learning_rate * g
             f_val = self.loss(U_new)
-            print(f"Iteration {i}: cost={f_val}")
+            #print(f"Iteration {i}: cost={f_val}")
+            #print(f"Time: {time.time() - now}")
+            print(f"\n--- Iteration {i} ---")
+            print(f"Cost={f_val}")
+            print(f"||grad||={jnp.linalg.norm(g)}")
             if jnp.linalg.norm(U_new - U) < tol or jnp.isnan(g).any():
                 return U_new
             U = U_new

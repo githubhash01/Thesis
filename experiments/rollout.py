@@ -152,7 +152,7 @@ def main():
     """
     # Run a single experiment
     experiment = ExperimentType.FINGER
-    run_experiment(experiment, visualise=False, save_data=True)
+    run_experiment(experiment, visualise=True, save_data=True)
 
 if __name__ == "__main__":
     main()

@@ -80,6 +80,72 @@ def compare_jacobians(jacobians_a, jacobians_b):
         "max_absolute_error": np.max(abs_error)
     }
 
+
+def compare_jacobians_all(
+        jacobians_dict,
+        baseline_key="fd"
+):
+    """
+    Compare multiple sets of Jacobians over time against a baseline method.
+
+    Args:
+        jacobians_dict: dict mapping method_name -> (T, nq+nv, nq+nv) array
+            of Jacobians. For example:
+            {
+              "autodiff": jac_autodiff,
+              "finite_diff": jac_fd,
+              "implicit_lax": jac_lax,
+              "implicit_jaxopt": jac_jaxopt
+            }
+        baseline_key: the method name in jacobians_dict to treat as baseline
+            for computing differences.
+
+    Returns:
+        stats_dict: a dictionary mapping each method -> summary stats,
+            e.g. mean and max Frobenius-norm differences.
+    """
+    # -- 1. Extract the baseline Jacobians --
+    baseline_jac = jacobians_dict[baseline_key]
+    T = baseline_jac.shape[0]
+
+    # -- 2. Prepare to plot --
+    plt.figure(figsize=(10, 4))
+
+    # We'll store stats for each method here:
+    stats_dict = {}
+
+    # -- 3. Compare each method to the baseline --
+    for method_name, jacobian_array in jacobians_dict.items():
+        if method_name == baseline_key:
+            continue  # skip comparing baseline to itself
+
+        # Check shapes match
+        if jacobian_array.shape != baseline_jac.shape:
+            raise ValueError(f"Shape mismatch between {baseline_key} and {method_name}")
+
+        # Compute Frobenius norm difference at each timestep
+        diff = baseline_jac - jacobian_array
+        frob_norms = np.linalg.norm(diff, ord='fro', axis=(1, 2))
+
+        # Plot the difference
+        plt.plot(range(T), frob_norms, label=f"{method_name} vs {baseline_key}")
+
+        # Record summary stats
+        stats_dict[method_name] = {
+            "mean_frobenius_diff": np.mean(frob_norms),
+            "max_frobenius_diff": np.max(frob_norms),
+        }
+
+    # -- 4. Finalize the plot --
+    plt.xlabel("Time Step")
+    plt.ylabel("Frobenius Norm of Error")
+    plt.title("Comparison of Jacobians vs Baseline")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    return stats_dict
+
 def set_one_bounce_analytic(time_steps=1000, timestep_length=0.01):
     """
     Build the analytic Jacobians for the one bounce experiment.
@@ -127,21 +193,9 @@ def set_one_bounce_analytic(time_steps=1000, timestep_length=0.01):
 
 def main():
 
-    experiment = ExperimentType.FINGER # setting the experiment to one bounce
+    experiment = ExperimentType.TWO_CART # setting the experiment to one bounce
 
     xml_path = os.path.join(BASE_DIR, "xmls", f"{experiment}.xml")
-    model = mujoco.MjModel.from_xml_path(filename=xml_path)
-    #states_fd, jacobians_fd = get_experiment_data(experiment, GradientMode.FD)
-    #states_ad, jacobians_ad = get_experiment_data(experiment, GradientMode.AUTODIFF)
-    #states_implicit_jaxopt, jacobians_implicit_jaxopt = get_experiment_data(experiment, GradientMode.IMPLICIT_JAXOPT)
-    #states_implicit_lax, jacobians_implicit_lax = get_experiment_data(experiment, GradientMode.IMPLICIT_LAX)
-
-    # print a random jacobian
-    #print_state_jacobian(jacobians_ad[600], model)
-
-    # compare the jacobians
-    #error_stats = compare_jacobians(jacobians_ad, jacobians_implicit_jaxopt)
-    #print(error_stats)
 
     states_autodiff, jacobians_autodiff = get_experiment_data(experiment, GradientMode.AUTODIFF)
     states_fd, jacobians_fd = get_experiment_data(experiment, GradientMode.FD)
@@ -150,8 +204,17 @@ def main():
 
     #print_state_jacobian(jacobians_fd[800], model)
     # compare the jacobians
-    error_stats = compare_jacobians(jacobians_implicit_jaxopt, jacobians_autodiff)
-    print(error_stats)
+    error_stats = compare_jacobians(jacobians_autodiff, jacobians_implicit_lax)
+    #print(error_stats)
+
+    jacobians_dict = {
+        "autodiff": jacobians_autodiff,
+        "fd": jacobians_fd,
+        "implicit_lax": jacobians_implicit_lax,
+        "implicit_jaxopt": jacobians_implicit_jaxopt
+    }
+
+    compare_jacobians_all(jacobians_dict, baseline_key="implicit_jaxopt")
 
 
 if __name__ == "__main__":

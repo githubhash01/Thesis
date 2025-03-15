@@ -28,11 +28,7 @@
     </asset>
 
 <!--   important mjx options  -->
-              <!-- iterations="100" -->
-  <option timestep="0.01"
-          impratio="10"
-          iterations="1"
-          ls_iterations="4">
+  <option timestep="0.0075" impratio="10" iterations="1" ls_iterations="4">
     <flag eulerdamp="disable"/>
   </option>
 
@@ -50,7 +46,7 @@
             <site type="ellipsoid" size=".025 .03 .025" rgba=".5 .5 .5 .3" group="3"/>
         </default>
     </default>
-c
+
     <worldbody>
         <light name="light" directional="true" diffuse=".6 .6 .6" pos="0 0 2" specular=".3 .3 .3"/>
         <geom name="ground" type="plane" pos="0 0 -0.6" size=".6 .2 10" material="grid"/>
